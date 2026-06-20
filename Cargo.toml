@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/z-audio-plugin",
+    "crates/z-audio-eq-plugin",
+    "crates/z-audio-webclap",
+    "crates/z-audio-webclap-eq",
+    "crates/wclap-plugin",
+    "crates/xtask",
+]
+exclude = [
+    "thirdparty/z-audio-dsp",
+]
+
+[profile.release]
+lto = "thin"
+strip = true

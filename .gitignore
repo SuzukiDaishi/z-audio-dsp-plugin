@@ -1,0 +1,27 @@
+# Rust build output
+/target/
+
+# wasm-pack / web build output
+/crates/z-audio-webclap/web/pkg/
+/crates/z-audio-webclap-eq/web/pkg/
+
+# Local browser/test artifacts
+/.playwright-mcp/
+/playwright-report/
+/test-results/
+
+# Editor and OS metadata
+/.vscode/
+/.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs and local environment files
+*.log
+.env
+.env.*
+!.env.example
+
+# Rust backup files
+**/*.rs.bk

@@ -1,0 +1,3 @@
+[submodule "thirdparty/z-audio-dsp"]
+	path = thirdparty/z-audio-dsp
+	url = https://github.com/SuzukiDaishi/z-audio-dsp.git

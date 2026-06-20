@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.simple-eq",
+  "name": "Z Audio Simple EQ",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "A simple 3-band Butterworth EQ built on z-audio-dsp, packaged as a real WCLAP plugin.",
+  "features": ["audio-effect", "equalizer", "eq"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_eq.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 520, "height": 500 },
+    "expanded_size": { "width": 960, "height": 540 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.simple-eq",
+      "name": "Z Audio Simple EQ",
+      "features": ["audio-effect", "equalizer", "eq"],
+      "has_ui": true
+    }
+  ]
+}

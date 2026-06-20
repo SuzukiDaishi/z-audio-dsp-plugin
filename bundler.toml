@@ -1,0 +1,5 @@
+[z-audio-plugin]
+name = "Z Audio Simple Synth"
+
+[z-audio-eq-plugin]
+name = "Z Audio Simple EQ"
