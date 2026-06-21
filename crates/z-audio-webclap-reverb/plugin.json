@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.parametric-reverb",
+  "name": "Z Audio Parametric Reverb",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "FDN parametric reverb built on z-audio-dsp, packaged as a real WCLAP plugin.",
+  "features": ["audio-effect", "reverb", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_reverb.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 760, "height": 460 },
+    "expanded_size": { "width": 980, "height": 650 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.parametric-reverb",
+      "name": "Z Audio Parametric Reverb",
+      "features": ["audio-effect", "reverb", "stereo"],
+      "has_ui": true
+    }
+  ]
+}

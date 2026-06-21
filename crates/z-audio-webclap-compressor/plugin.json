@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.compressor",
+  "name": "Z Audio Compressor",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Feed-forward compressor built on z-audio-dsp, packaged as a real WCLAP plugin.",
+  "features": ["audio-effect", "compressor", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_compressor.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 720, "height": 430 },
+    "expanded_size": { "width": 920, "height": 620 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.compressor",
+      "name": "Z Audio Compressor",
+      "features": ["audio-effect", "compressor", "stereo"],
+      "has_ui": true
+    }
+  ]
+}

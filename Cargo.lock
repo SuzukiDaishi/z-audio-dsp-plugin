@@ -2595,6 +2595,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-compressor-plugin"
+version = "0.1.0"
+dependencies = [
+ "nih_plug",
+ "nih_plug_egui",
+ "z-audio-dsp",
+]
+
+[[package]]
 name = "z-audio-dsp"
 version = "0.1.0"
 dependencies = [
@@ -2611,6 +2620,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-limiter-plugin"
+version = "0.1.0"
+dependencies = [
+ "nih_plug",
+ "nih_plug_egui",
+ "z-audio-dsp",
+]
+
+[[package]]
+name = "z-audio-piano-plugin"
+version = "0.1.0"
+dependencies = [
+ "nih_plug",
+ "z-audio-dsp",
+ "z-audio-synth",
+]
+
+[[package]]
 name = "z-audio-plugin"
 version = "0.1.0"
 dependencies = [
@@ -2618,6 +2645,15 @@ dependencies = [
  "nih_plug_egui",
  "z-audio-dsp",
  "z-audio-synth",
+]
+
+[[package]]
+name = "z-audio-reverb-plugin"
+version = "0.1.0"
+dependencies = [
+ "nih_plug",
+ "nih_plug_egui",
+ "z-audio-dsp",
 ]
 
 [[package]]
@@ -2637,7 +2673,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-webclap-compressor"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+ "z-audio-dsp",
+]
+
+[[package]]
 name = "z-audio-webclap-eq"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+ "z-audio-dsp",
+]
+
+[[package]]
+name = "z-audio-webclap-limiter"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+ "z-audio-dsp",
+]
+
+[[package]]
+name = "z-audio-webclap-piano"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+ "z-audio-dsp",
+ "z-audio-synth",
+]
+
+[[package]]
+name = "z-audio-webclap-reverb"
 version = "0.1.0"
 dependencies = [
  "wclap-plugin",

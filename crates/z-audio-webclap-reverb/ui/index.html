@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z Audio Parametric Reverb</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>Parametric Reverb</h1>
+          <p class="eyebrow">Z AUDIO SPACE</p>
+        </div>
+        <span id="status">Waiting for host</span>
+      </header>
+      <section class="graph-panel" aria-label="Reverb room and tail">
+        <svg viewBox="0 0 820 286" preserveAspectRatio="none" aria-hidden="true">
+          <g id="room-lines"></g>
+          <path id="tail-line"></path>
+          <line id="early-marker" />
+          <path id="filter-band"></path>
+        </svg>
+      </section>
+      <form id="controls" class="controls" autocomplete="off"></form>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

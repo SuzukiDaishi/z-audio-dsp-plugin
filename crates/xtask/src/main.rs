@@ -6,6 +6,52 @@ use anyhow::{bail, Context, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
+struct WebClapBundle {
+    package: &'static str,
+    bundle_name: &'static str,
+    crate_dir: &'static str,
+    wasm_file: &'static str,
+}
+
+const WEBCLAP_BUNDLES: &[WebClapBundle] = &[
+    WebClapBundle {
+        package: "z-audio-webclap",
+        bundle_name: "z-audio-simple-synth.wclap",
+        crate_dir: "crates/z-audio-webclap",
+        wasm_file: "z_audio_webclap.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-eq",
+        bundle_name: "z-audio-simple-eq.wclap",
+        crate_dir: "crates/z-audio-webclap-eq",
+        wasm_file: "z_audio_webclap_eq.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-piano",
+        bundle_name: "z-audio-formula-piano.wclap",
+        crate_dir: "crates/z-audio-webclap-piano",
+        wasm_file: "z_audio_webclap_piano.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-reverb",
+        bundle_name: "z-audio-parametric-reverb.wclap",
+        crate_dir: "crates/z-audio-webclap-reverb",
+        wasm_file: "z_audio_webclap_reverb.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-limiter",
+        bundle_name: "z-audio-limiter.wclap",
+        crate_dir: "crates/z-audio-webclap-limiter",
+        wasm_file: "z_audio_webclap_limiter.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-compressor",
+        bundle_name: "z-audio-compressor.wclap",
+        crate_dir: "crates/z-audio-webclap-compressor",
+        wasm_file: "z_audio_webclap_compressor.wasm",
+    },
+];
+
 fn main() -> nih_plug_xtask::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("bundle-webclap") {
@@ -25,11 +71,10 @@ fn bundle_webclap(args: &[String]) -> Result<()> {
     build
         .arg("build")
         .arg("--target")
-        .arg("wasm32-unknown-unknown")
-        .arg("-p")
-        .arg("z-audio-webclap")
-        .arg("-p")
-        .arg("z-audio-webclap-eq");
+        .arg("wasm32-unknown-unknown");
+    for bundle in WEBCLAP_BUNDLES {
+        build.arg("-p").arg(bundle.package);
+    }
     if release {
         build.arg("--release");
     }
@@ -44,22 +89,16 @@ fn bundle_webclap(args: &[String]) -> Result<()> {
     let target_dir = Path::new("target").join("webclap");
     fs::create_dir_all(&target_dir).context("could not create target/webclap")?;
 
-    bundle_one_webclap(
-        &target_dir,
-        "z-audio-simple-synth.wclap",
-        Path::new("crates/z-audio-webclap"),
-        Path::new("target/wasm32-unknown-unknown")
-            .join(profile)
-            .join("z_audio_webclap.wasm"),
-    )?;
-    bundle_one_webclap(
-        &target_dir,
-        "z-audio-simple-eq.wclap",
-        Path::new("crates/z-audio-webclap-eq"),
-        Path::new("target/wasm32-unknown-unknown")
-            .join(profile)
-            .join("z_audio_webclap_eq.wasm"),
-    )?;
+    for bundle in WEBCLAP_BUNDLES {
+        bundle_one_webclap(
+            &target_dir,
+            bundle.bundle_name,
+            Path::new(bundle.crate_dir),
+            Path::new("target/wasm32-unknown-unknown")
+                .join(profile)
+                .join(bundle.wasm_file),
+        )?;
+    }
 
     Ok(())
 }
@@ -89,7 +128,10 @@ fn bundle_one_webclap(
     fs::write(bundle_dir.join("plugin.json"), manifest)
         .with_context(|| format!("could not write '{}/plugin.json'", bundle_dir.display()))?;
 
-    copy_dir_recursive(&crate_dir.join("ui"), &bundle_dir.join("ui"))?;
+    let ui_dir = crate_dir.join("ui");
+    if ui_dir.is_dir() {
+        copy_dir_recursive(&ui_dir, &bundle_dir.join("ui"))?;
+    }
     let archive_path = target_dir.join(archive_name);
     create_webclap_archive(&bundle_dir, &archive_path)?;
     eprintln!("Created WebCLAP bundle at '{}'", bundle_dir.display());
@@ -131,9 +173,12 @@ fn create_webclap_archive(bundle_dir: &Path, archive_path: &Path) -> Result<()> 
     archive
         .append_path_with_name(bundle_dir.join("plugin.json"), "plugin.json")
         .with_context(|| format!("could not archive '{}/plugin.json'", bundle_dir.display()))?;
-    archive
-        .append_dir_all("ui", bundle_dir.join("ui"))
-        .with_context(|| format!("could not archive '{}/ui'", bundle_dir.display()))?;
+    let ui_dir = bundle_dir.join("ui");
+    if ui_dir.is_dir() {
+        archive
+            .append_dir_all("ui", ui_dir)
+            .with_context(|| format!("could not archive '{}/ui'", bundle_dir.display()))?;
+    }
 
     let encoder = archive
         .into_inner()

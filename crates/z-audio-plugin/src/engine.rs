@@ -99,6 +99,7 @@ fn current_param_value(params: &ZAudioSimpleSynthParams, id: ParamId) -> f32 {
         ParamId::EqHighType => ButterworthKind::from(params.eq_high.kind.value()).to_param_value(),
         ParamId::EqHighGainDb => params.eq_high.gain_db.value(),
         ParamId::EqHighQ => params.eq_high.q.value(),
+        _ => id.metadata().default,
     }
 }
 

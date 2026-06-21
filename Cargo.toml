@@ -3,8 +3,16 @@ resolver = "2"
 members = [
     "crates/z-audio-plugin",
     "crates/z-audio-eq-plugin",
+    "crates/z-audio-piano-plugin",
+    "crates/z-audio-reverb-plugin",
+    "crates/z-audio-limiter-plugin",
+    "crates/z-audio-compressor-plugin",
     "crates/z-audio-webclap",
     "crates/z-audio-webclap-eq",
+    "crates/z-audio-webclap-piano",
+    "crates/z-audio-webclap-reverb",
+    "crates/z-audio-webclap-limiter",
+    "crates/z-audio-webclap-compressor",
     "crates/wclap-plugin",
     "crates/xtask",
 ]

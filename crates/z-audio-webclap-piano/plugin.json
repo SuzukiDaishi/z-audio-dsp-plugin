@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.formula-piano",
+  "name": "Z Audio Formula Piano",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Modal formula piano instrument built on z-audio-dsp, packaged as a real WCLAP plugin.",
+  "features": ["instrument", "piano", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_piano.wasm",
+  "format": "wasm",
+  "has_ui": false,
+  "plugins": [
+    {
+      "id": "dev.zaudio.formula-piano",
+      "name": "Z Audio Formula Piano",
+      "features": ["instrument", "piano", "stereo"],
+      "has_ui": false
+    }
+  ]
+}

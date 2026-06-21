@@ -2,10 +2,14 @@
 
 Audio plugin wrappers and packaging for `z-audio-dsp`.
 
-This workspace builds two simple plugins:
+This workspace builds native and WebCLAP wrappers for:
 
 - `Z Audio Simple Synth`: MIDI note input to stereo audio output
 - `Z Audio Simple EQ`: mono/stereo audio input to audio output
+- `Z Audio Formula Piano`: modal/formula piano instrument
+- `Z Audio Parametric Reverb`: stereo FDN reverb effect
+- `Z Audio Limiter`: stereo lookahead limiter effect
+- `Z Audio Compressor`: stereo feed-forward compressor effect
 
 Supported plugin formats:
 
@@ -23,8 +27,10 @@ assets, and packaging tasks.
 crates/
   z-audio-plugin/        Native VST3/CLAP synth
   z-audio-eq-plugin/     Native VST3/CLAP EQ
+  z-audio-*-plugin/      Native VST3/CLAP piano, reverb, limiter, compressor
   z-audio-webclap/       WebCLAP synth wasm + UI
   z-audio-webclap-eq/    WebCLAP EQ wasm + UI
+  z-audio-webclap-*/     WebCLAP piano, reverb, limiter, compressor wasm
   wclap-plugin/          Minimal WebCLAP/CLAP runtime glue
   xtask/                 Packaging tasks
 thirdparty/
@@ -62,6 +68,15 @@ Bundle the EQ:
 cargo xtask bundle z-audio-eq-plugin --release
 ```
 
+Bundle the additional plugins:
+
+```powershell
+cargo xtask bundle z-audio-piano-plugin --release
+cargo xtask bundle z-audio-reverb-plugin --release
+cargo xtask bundle z-audio-limiter-plugin --release
+cargo xtask bundle z-audio-compressor-plugin --release
+```
+
 Outputs:
 
 ```text
@@ -69,11 +84,19 @@ target/bundled/Z Audio Simple Synth.vst3
 target/bundled/Z Audio Simple Synth.clap
 target/bundled/Z Audio Simple EQ.vst3
 target/bundled/Z Audio Simple EQ.clap
+target/bundled/Z Audio Formula Piano.vst3
+target/bundled/Z Audio Formula Piano.clap
+target/bundled/Z Audio Parametric Reverb.vst3
+target/bundled/Z Audio Parametric Reverb.clap
+target/bundled/Z Audio Limiter.vst3
+target/bundled/Z Audio Limiter.clap
+target/bundled/Z Audio Compressor.vst3
+target/bundled/Z Audio Compressor.clap
 ```
 
 ## Build WebCLAP Plugins
 
-Build wasm and package both WebCLAP plugins:
+Build wasm and package all WebCLAP plugins:
 
 ```powershell
 cargo xtask bundle-webclap --release
@@ -86,11 +109,20 @@ target/webclap/z-audio-simple-synth.wclap/
 target/webclap/z-audio-simple-synth.wclap.tar.gz
 target/webclap/z-audio-simple-eq.wclap/
 target/webclap/z-audio-simple-eq.wclap.tar.gz
+target/webclap/z-audio-formula-piano.wclap/
+target/webclap/z-audio-formula-piano.wclap.tar.gz
+target/webclap/z-audio-parametric-reverb.wclap/
+target/webclap/z-audio-parametric-reverb.wclap.tar.gz
+target/webclap/z-audio-limiter.wclap/
+target/webclap/z-audio-limiter.wclap.tar.gz
+target/webclap/z-audio-compressor.wclap/
+target/webclap/z-audio-compressor.wclap.tar.gz
 ```
 
 Use the `.wclap.tar.gz` files when testing with WebCLAP hosts such as Plinken.
 
-The tarballs are expected to contain these paths at archive root:
+The synth, EQ, reverb, limiter, and compressor tarballs contain these paths at
+archive root:
 
 ```text
 module.wasm
@@ -100,12 +132,19 @@ ui/main.js
 ui/styles.css
 ```
 
+The piano WebCLAP bundle currently exposes host parameters without a custom
+WebCLAP UI, so its tarball contains `module.wasm` and `plugin.json`.
+
 ## Plugin IDs
 
 | Plugin | CLAP ID | VST3 Class ID | WebCLAP bundle |
 | --- | --- | --- | --- |
 | Z Audio Simple Synth | `dev.zaudio.simple-synth` | `ZAudioSmplSynth1` | `z-audio-simple-synth.wclap.tar.gz` |
 | Z Audio Simple EQ | `dev.zaudio.simple-eq` | `ZAudioSimpleEQ01` | `z-audio-simple-eq.wclap.tar.gz` |
+| Z Audio Formula Piano | `dev.zaudio.formula-piano` | `ZAudioFormulaPno` | `z-audio-formula-piano.wclap.tar.gz` |
+| Z Audio Parametric Reverb | `dev.zaudio.parametric-reverb` | `ZAudioParaReverb` | `z-audio-parametric-reverb.wclap.tar.gz` |
+| Z Audio Limiter | `dev.zaudio.limiter` | `ZAudioLimiter000` | `z-audio-limiter.wclap.tar.gz` |
+| Z Audio Compressor | `dev.zaudio.compressor` | `ZAudioCompressor` | `z-audio-compressor.wclap.tar.gz` |
 
 ## Parameters
 
@@ -147,8 +186,20 @@ Root workspace:
 ```powershell
 cargo fmt --all
 cargo test --workspace
-cargo check --target wasm32-unknown-unknown -p z-audio-webclap -p z-audio-webclap-eq
-cargo build --release --target wasm32-unknown-unknown -p z-audio-webclap -p z-audio-webclap-eq
+cargo check --target wasm32-unknown-unknown `
+  -p z-audio-webclap `
+  -p z-audio-webclap-eq `
+  -p z-audio-webclap-piano `
+  -p z-audio-webclap-reverb `
+  -p z-audio-webclap-limiter `
+  -p z-audio-webclap-compressor
+cargo build --release --target wasm32-unknown-unknown `
+  -p z-audio-webclap `
+  -p z-audio-webclap-eq `
+  -p z-audio-webclap-piano `
+  -p z-audio-webclap-reverb `
+  -p z-audio-webclap-limiter `
+  -p z-audio-webclap-compressor
 ```
 
 DSP submodule:
@@ -165,6 +216,9 @@ UI syntax checks:
 ```powershell
 node --check crates/z-audio-webclap/ui/main.js
 node --check crates/z-audio-webclap-eq/ui/main.js
+node --check crates/z-audio-webclap-reverb/ui/main.js
+node --check crates/z-audio-webclap-limiter/ui/main.js
+node --check crates/z-audio-webclap-compressor/ui/main.js
 ```
 
 Packaging smoke checks:
@@ -173,6 +227,10 @@ Packaging smoke checks:
 cargo xtask bundle-webclap --release
 tar -tf target/webclap/z-audio-simple-synth.wclap.tar.gz
 tar -tf target/webclap/z-audio-simple-eq.wclap.tar.gz
+tar -tf target/webclap/z-audio-formula-piano.wclap.tar.gz
+tar -tf target/webclap/z-audio-parametric-reverb.wclap.tar.gz
+tar -tf target/webclap/z-audio-limiter.wclap.tar.gz
+tar -tf target/webclap/z-audio-compressor.wclap.tar.gz
 ```
 
 ## Submodule Workflow

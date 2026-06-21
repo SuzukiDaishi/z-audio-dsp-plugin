@@ -3,3 +3,15 @@ name = "Z Audio Simple Synth"
 
 [z-audio-eq-plugin]
 name = "Z Audio Simple EQ"
+
+[z-audio-piano-plugin]
+name = "Z Audio Formula Piano"
+
+[z-audio-reverb-plugin]
+name = "Z Audio Parametric Reverb"
+
+[z-audio-limiter-plugin]
+name = "Z Audio Limiter"
+
+[z-audio-compressor-plugin]
+name = "Z Audio Compressor"

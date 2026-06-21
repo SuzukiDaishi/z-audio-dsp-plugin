@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.limiter",
+  "name": "Z Audio Limiter",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Lookahead peak limiter built on z-audio-dsp, packaged as a real WCLAP plugin.",
+  "features": ["audio-effect", "limiter", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_limiter.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 700, "height": 400 },
+    "expanded_size": { "width": 880, "height": 560 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.limiter",
+      "name": "Z Audio Limiter",
+      "features": ["audio-effect", "limiter", "stereo"],
+      "has_ui": true
+    }
+  ]
+}

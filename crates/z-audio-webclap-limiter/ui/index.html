@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z Audio Limiter</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>Limiter</h1>
+          <p class="eyebrow">Z AUDIO DYNAMICS</p>
+        </div>
+        <span id="status">Waiting for host</span>
+      </header>
+      <section class="graph-panel" aria-label="Limiter curve">
+        <svg viewBox="0 0 760 250" preserveAspectRatio="none" aria-hidden="true">
+          <g id="grid"></g>
+          <path id="unity-line"></path>
+          <path id="curve-line"></path>
+          <line id="threshold-line" />
+          <line id="ceiling-line" />
+        </svg>
+      </section>
+      <form id="controls" class="controls" autocomplete="off"></form>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

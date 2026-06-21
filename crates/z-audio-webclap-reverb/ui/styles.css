@@ -1,0 +1,274 @@
+:root {
+  color-scheme: dark;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0a0f13;
+  color: #eef3f0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+body {
+  background:
+    radial-gradient(circle at 60% -25%, #223b37 0%, transparent 44%),
+    linear-gradient(180deg, #121a20, #080d12 100%);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+main {
+  display: grid;
+  gap: 8px;
+  grid-template-rows: 48px minmax(0, 1fr) 190px;
+  height: 100%;
+  padding: 10px;
+  width: 100%;
+}
+
+.plugin-header,
+.graph-panel,
+.control-section {
+  background: linear-gradient(180deg, #1a252b, #111a1e 62%, #0c1216);
+  border: 1px solid #2b3b41;
+  border-radius: 8px;
+  box-shadow:
+    inset 0 1px 0 #ffffff14,
+    0 12px 30px #0008;
+}
+
+.plugin-header {
+  align-items: center;
+  display: flex;
+  justify-content: space-between;
+  min-width: 0;
+  padding: 9px 12px;
+}
+
+.title-row {
+  align-items: baseline;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+h1 {
+  color: #f4f2e7;
+  font-size: 18px;
+  font-weight: 850;
+  letter-spacing: 0;
+  line-height: 1;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.eyebrow,
+#status,
+.readout {
+  font: 850 10px/1 ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: 0;
+}
+
+.eyebrow {
+  color: #84dec0;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+#status {
+  background: #0a1614;
+  border: 1px solid #27564d;
+  border-radius: 999px;
+  color: #90ead0;
+  flex: 0 0 auto;
+  max-width: 134px;
+  overflow: hidden;
+  padding: 8px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-panel {
+  min-height: 0;
+  overflow: hidden;
+}
+
+svg {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+.room-wall {
+  fill: none;
+  stroke: #78c9bb;
+  stroke-width: 2.4;
+}
+
+.reflection-line {
+  stroke: #8ad9c4;
+  stroke-linecap: round;
+}
+
+#tail-line {
+  fill: none;
+  filter: drop-shadow(0 0 8px #e6b66c66);
+  stroke: #e8b96d;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 3;
+}
+
+#early-marker {
+  stroke: #e77966;
+  stroke-dasharray: 6 5;
+  stroke-width: 1.7;
+}
+
+#filter-band {
+  fill: #7ddabc;
+  fill-opacity: 0.12;
+  stroke: #7ddabc;
+  stroke-opacity: 0.35;
+  stroke-width: 1;
+}
+
+.controls {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-height: 0;
+  min-width: 0;
+}
+
+.control-section {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 9px;
+}
+
+.section-title {
+  color: #84dec0;
+  font-size: 12px;
+  font-weight: 900;
+  margin: 0;
+  text-transform: uppercase;
+}
+
+.control {
+  align-items: center;
+  color: #d7dedb;
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 74px minmax(0, 1fr) 68px;
+  min-height: 23px;
+  min-width: 0;
+}
+
+.control-label {
+  font-size: 10px;
+  font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.readout {
+  color: #efc874;
+  min-width: 0;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slider-rail {
+  align-items: center;
+  display: flex;
+  min-width: 0;
+}
+
+input[type="range"] {
+  --value: 50%;
+  appearance: none;
+  background:
+    linear-gradient(90deg, #84dec0 0 var(--value), #0a0e12 var(--value) 100%),
+    #0a0e12;
+  border: 1px solid #354541;
+  border-radius: 999px;
+  box-shadow: inset 0 2px 5px #000b;
+  cursor: ew-resize;
+  height: 10px;
+  min-width: 0;
+  outline: none;
+  width: 100%;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  background: linear-gradient(180deg, #f5f7ed, #cbdcc8);
+  border: 1px solid #536653;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 2px #0008,
+    0 3px 8px #0009;
+  height: 18px;
+  width: 10px;
+}
+
+input[type="range"]::-moz-range-thumb {
+  background: linear-gradient(180deg, #f5f7ed, #cbdcc8);
+  border: 1px solid #536653;
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 2px #0008,
+    0 3px 8px #0009;
+  height: 18px;
+  width: 10px;
+}
+
+input:focus-visible {
+  outline: 2px solid #92edd5;
+  outline-offset: 2px;
+}
+
+@media (max-width: 720px), (max-height: 440px) {
+  main {
+    gap: 6px;
+    grid-template-rows: 44px minmax(0, 1fr) 182px;
+    padding: 8px;
+  }
+
+  h1 {
+    font-size: 15px;
+  }
+
+  .controls {
+    gap: 6px;
+  }
+
+  .control-section {
+    padding: 7px;
+  }
+
+  .control {
+    gap: 5px;
+    grid-template-columns: 58px minmax(0, 1fr) 54px;
+  }
+}
