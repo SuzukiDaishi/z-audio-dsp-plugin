@@ -2604,6 +2604,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-drums-plugin"
+version = "0.1.0"
+dependencies = [
+ "nih_plug",
+ "z-audio-dsp",
+ "z-audio-synth",
+]
+
+[[package]]
 name = "z-audio-dsp"
 version = "0.1.0"
 dependencies = [
@@ -2678,6 +2687,15 @@ version = "0.1.0"
 dependencies = [
  "wclap-plugin",
  "z-audio-dsp",
+]
+
+[[package]]
+name = "z-audio-webclap-drums"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+ "z-audio-dsp",
+ "z-audio-synth",
 ]
 
 [[package]]

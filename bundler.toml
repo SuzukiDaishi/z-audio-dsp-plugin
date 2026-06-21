@@ -7,6 +7,9 @@ name = "Z Audio Simple EQ"
 [z-audio-piano-plugin]
 name = "Z Audio Formula Piano"
 
+[z-audio-drums-plugin]
+name = "Z Audio Formula Drum Set"
+
 [z-audio-reverb-plugin]
 name = "Z Audio Parametric Reverb"
 

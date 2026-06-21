@@ -1,0 +1,23 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.formula-drums",
+  "name": "Z Audio Formula Drum Set",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Modal formula drum set instrument built on z-audio-dsp, packaged as a real WCLAP plugin.",
+  "features": ["instrument", "drum", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_drums.wasm",
+  "format": "wasm",
+  "has_ui": false,
+  "plugins": [
+    {
+      "id": "dev.zaudio.formula-drums",
+      "name": "Z Audio Formula Drum Set",
+      "features": ["instrument", "drum", "stereo"],
+      "has_ui": false
+    }
+  ]
+}
