@@ -355,3 +355,305 @@ fn downmix_truncate(pcm: &[f32], channels: u8, max_frames: usize) -> Vec<f32> {
     }
     mono
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn region_map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    fn region_source(
+        lokey: u8,
+        hikey: u8,
+        hivel: u8,
+        trigger: TriggerKind,
+        channels: u8,
+        pcm: Vec<f32>,
+    ) -> VcslRegionSource {
+        VcslRegionSource {
+            lokey,
+            hikey,
+            lovel: 0,
+            hivel,
+            pitch_keycenter: lokey,
+            tune_cents: 0.0,
+            volume_db: 0.0,
+            amp_veltrack: 1.0,
+            offset_frames: 0,
+            trigger,
+            ampeg_attack: 0.004,
+            ampeg_decay: 0.0,
+            ampeg_sustain: 1.0,
+            ampeg_release: 0.4,
+            sample_rate: 100.0,
+            channels,
+            pcm,
+        }
+    }
+
+    #[test]
+    fn arg_value_finds_flag_following_value() {
+        let args = vec!["--instrument".to_string(), "Grand Piano, K".to_string()];
+        assert_eq!(
+            arg_value(&args, "--instrument"),
+            Some("Grand Piano, K".to_string())
+        );
+        assert_eq!(arg_value(&args, "--missing"), None);
+    }
+
+    #[test]
+    fn arg_value_ignores_flag_with_no_trailing_value() {
+        let args = vec!["--instrument".to_string()];
+        assert_eq!(arg_value(&args, "--instrument"), None);
+    }
+
+    #[test]
+    fn parse_u8_falls_back_to_default_when_missing_or_unparsable() {
+        let region = region_map(&[("lokey", "garbage")]);
+        assert_eq!(parse_u8(&region, "lokey", 9), 9);
+        assert_eq!(parse_u8(&region, "hikey", 42), 42);
+    }
+
+    #[test]
+    fn parse_u8_rounds_and_clamps_to_midi_range() {
+        let region = region_map(&[("lokey", "60.6"), ("hikey", "999")]);
+        assert_eq!(parse_u8(&region, "lokey", 0), 61);
+        assert_eq!(parse_u8(&region, "hikey", 0), 127);
+    }
+
+    #[test]
+    fn parse_f32_falls_back_to_default_when_missing_or_unparsable() {
+        let region = region_map(&[("tune", "nope")]);
+        assert_eq!(parse_f32(&region, "tune", 1.5), 1.5);
+        assert_eq!(parse_f32(&region, "volume", 2.5), 2.5);
+    }
+
+    #[test]
+    fn parse_f32_parses_negative_values() {
+        let region = region_map(&[("tune", "-11.5")]);
+        assert_eq!(parse_f32(&region, "tune", 0.0), -11.5);
+    }
+
+    #[test]
+    fn parse_sfz_applies_global_and_group_defaults_to_a_region() {
+        let text = "\
+<global>
+global_volume=2
+amp_veltrack=88
+
+<group>
+trigger=attack
+ampeg_attack=0.004
+
+<region>
+lokey=21
+hikey=23
+sample=a.flac
+";
+        let mut unsupported = HashMap::new();
+        let regions = parse_sfz(text, &mut unsupported);
+        assert_eq!(regions.len(), 1);
+        let region = &regions[0];
+        assert_eq!(region.get("global_volume").map(String::as_str), Some("2"));
+        assert_eq!(region.get("amp_veltrack").map(String::as_str), Some("88"));
+        assert_eq!(region.get("trigger").map(String::as_str), Some("attack"));
+        assert_eq!(region.get("lokey").map(String::as_str), Some("21"));
+        assert!(unsupported.is_empty());
+    }
+
+    #[test]
+    fn parse_sfz_region_overrides_group_which_overrides_global() {
+        let text = "\
+<global>
+volume=1
+
+<group>
+volume=2
+trigger=attack
+
+<region>
+volume=3
+sample=a.flac
+
+<region>
+sample=b.flac
+";
+        let mut unsupported = HashMap::new();
+        let regions = parse_sfz(text, &mut unsupported);
+        assert_eq!(regions.len(), 2);
+        // First region overrides the group's volume.
+        assert_eq!(regions[0].get("volume").map(String::as_str), Some("3"));
+        // Second region falls through to the group's volume.
+        assert_eq!(regions[1].get("volume").map(String::as_str), Some("2"));
+        // Both inherit the group-level trigger.
+        assert_eq!(regions[0].get("trigger").map(String::as_str), Some("attack"));
+        assert_eq!(regions[1].get("trigger").map(String::as_str), Some("attack"));
+    }
+
+    #[test]
+    fn parse_sfz_strips_comments_and_blank_lines() {
+        let text = "\
+// a leading comment
+
+<region>
+lokey=21 // inline comment
+sample=a.flac
+";
+        let mut unsupported = HashMap::new();
+        let regions = parse_sfz(text, &mut unsupported);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].get("lokey").map(String::as_str), Some("21"));
+    }
+
+    #[test]
+    fn parse_sfz_records_unsupported_opcodes_without_dropping_the_region() {
+        let text = "\
+<region>
+lokey=21
+seq_length=2
+seq_position=1
+sample=a.flac
+";
+        let mut unsupported = HashMap::new();
+        let regions = parse_sfz(text, &mut unsupported);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(unsupported.get("seq_length"), Some(&1));
+        assert_eq!(unsupported.get("seq_position"), Some(&1));
+        assert_eq!(regions[0].get("lokey").map(String::as_str), Some("21"));
+    }
+
+    #[test]
+    fn parse_sfz_resets_group_defaults_at_each_group_header() {
+        let text = "\
+<group>
+trigger=attack
+
+<region>
+sample=a.flac
+
+<group>
+trigger=release
+
+<region>
+sample=b.flac
+";
+        let mut unsupported = HashMap::new();
+        let regions = parse_sfz(text, &mut unsupported);
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].get("trigger").map(String::as_str), Some("attack"));
+        assert_eq!(regions[1].get("trigger").map(String::as_str), Some("release"));
+    }
+
+    #[test]
+    fn parse_sfz_captures_trailing_region_with_no_following_header() {
+        let text = "<region>\nlokey=10\nsample=a.flac\n";
+        let mut unsupported = HashMap::new();
+        let regions = parse_sfz(text, &mut unsupported);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].get("lokey").map(String::as_str), Some("10"));
+    }
+
+    #[test]
+    fn parse_sfz_with_no_regions_returns_empty() {
+        let text = "<global>\nglobal_volume=2\n";
+        let mut unsupported = HashMap::new();
+        let regions = parse_sfz(text, &mut unsupported);
+        assert!(regions.is_empty());
+    }
+
+    #[test]
+    fn downmix_truncate_passes_mono_through_unchanged() {
+        let pcm = vec![0.1, 0.2, 0.3];
+        let out = downmix_truncate(&pcm, 1, 10);
+        assert_eq!(out, pcm);
+    }
+
+    #[test]
+    fn downmix_truncate_averages_stereo_channels() {
+        let pcm = vec![1.0, -1.0, 0.5, 0.5];
+        let out = downmix_truncate(&pcm, 2, 10);
+        assert_eq!(out, vec![0.0, 0.5]);
+    }
+
+    #[test]
+    fn downmix_truncate_caps_to_max_frames() {
+        let pcm = vec![1.0; 100];
+        let out = downmix_truncate(&pcm, 1, 10);
+        assert_eq!(out.len(), 10);
+    }
+
+    #[test]
+    fn downmix_truncate_does_not_pad_short_input() {
+        let pcm = vec![1.0, 2.0];
+        let out = downmix_truncate(&pcm, 1, 1000);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn build_dev_bank_keeps_only_the_highest_velocity_layer_per_note() {
+        let sources = vec![
+            region_source(60, 60, 65, TriggerKind::Attack, 1, vec![1.0; 100]),
+            region_source(60, 60, 127, TriggerKind::Attack, 1, vec![2.0; 100]),
+        ];
+        let dev = build_dev_bank(&sources);
+        let attack: Vec<_> = dev.iter().filter(|r| r.trigger == TriggerKind::Attack).collect();
+        assert_eq!(attack.len(), 1);
+        assert_eq!(attack[0].hivel, 127); // re-widened to full range in the dev bank
+        assert!(attack[0].pcm.iter().all(|s| *s == 2.0));
+    }
+
+    #[test]
+    fn build_dev_bank_downmixes_to_mono_and_truncates() {
+        let long_stereo = vec![1.0; (DEV_MAX_SECONDS as usize + 1) * 100 * 2];
+        let sources = vec![region_source(
+            60,
+            60,
+            127,
+            TriggerKind::Attack,
+            2,
+            long_stereo,
+        )];
+        let dev = build_dev_bank(&sources);
+        assert_eq!(dev.len(), 1);
+        assert_eq!(dev[0].channels, 1);
+        let max_frames = (DEV_MAX_SECONDS * dev[0].sample_rate) as usize;
+        assert!(dev[0].pcm.len() <= max_frames);
+    }
+
+    #[test]
+    fn build_dev_bank_widens_key_ranges_to_cover_gaps_between_dev_notes() {
+        let sources: Vec<_> = DEV_NOTES
+            .iter()
+            .map(|&note| region_source(note, note, 127, TriggerKind::Attack, 1, vec![1.0; 10]))
+            .collect();
+        let dev = build_dev_bank(&sources);
+        let attack: Vec<_> = dev.iter().filter(|r| r.trigger == TriggerKind::Attack).collect();
+        assert_eq!(attack.len(), DEV_NOTES.len());
+        // Full MIDI range should be covered with no gaps and no overlaps.
+        assert_eq!(attack[0].lokey, 0);
+        assert_eq!(attack.last().unwrap().hikey, 127);
+        for i in 1..attack.len() {
+            assert_eq!(
+                attack[i].lokey,
+                attack[i - 1].hikey + 1,
+                "gap/overlap between dev note {} and {}",
+                i - 1,
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn build_dev_bank_skips_notes_with_no_covering_source() {
+        // No source covers any DEV_NOTES key, so the dev bank should end up
+        // empty rather than panicking.
+        let sources = vec![region_source(0, 5, 127, TriggerKind::Attack, 1, vec![1.0; 10])];
+        let dev = build_dev_bank(&sources);
+        assert!(dev.is_empty());
+    }
+}
