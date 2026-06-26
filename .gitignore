@@ -26,6 +26,11 @@ desktop.ini
 # Rust backup files
 **/*.rs.bk
 
+# VCSL Keys source archive (~650MB, CC0; not redistributed via this repo).
+# Download it yourself from https://versilian-studios.com/vcsl-keys/ and
+# drop it at this path before running `cargo xtask prepare-vcsl-piano`.
+/docs/VCSL_Keys.zip
+
 # Generated VCSL sampler bank (large; regenerate via `cargo xtask prepare-vcsl-piano`).
 # The small dev bank is committed: z-audio-webclap-vcsl-piano embeds it at build time.
 /assets/vcsl-piano/grand-piano-k.bank

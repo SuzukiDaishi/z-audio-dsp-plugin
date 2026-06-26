@@ -7,6 +7,7 @@ This workspace builds native and WebCLAP wrappers for:
 - `Z Audio Simple Synth`: MIDI note input to stereo audio output
 - `Z Audio Simple EQ`: mono/stereo audio input to audio output
 - `Z Audio Formula Piano`: modal/formula piano instrument
+- `Z Audio VCSL Piano`: sampler piano built from VCSL Keys "Grand Piano, K"
 - `Z Audio Formula Drum Set`: modal/formula GM drum set instrument
 - `Z Audio Parametric Reverb`: stereo FDN reverb effect
 - `Z Audio Limiter`: stereo lookahead limiter effect
@@ -26,19 +27,47 @@ assets, and packaging tasks.
 
 ```text
 crates/
-  z-audio-plugin/        Native VST3/CLAP synth
-  z-audio-eq-plugin/     Native VST3/CLAP EQ
-  z-audio-*-plugin/      Native VST3/CLAP piano, drums, reverb, limiter, compressor
-  z-audio-webclap/       WebCLAP synth wasm + UI
-  z-audio-webclap-eq/    WebCLAP EQ wasm + UI
-  z-audio-webclap-*/     WebCLAP piano, drums, reverb, limiter, compressor wasm
-  wclap-plugin/          Minimal WebCLAP/CLAP runtime glue
-  xtask/                 Packaging tasks
+  z-audio-plugin/             Native VST3/CLAP synth
+  z-audio-eq-plugin/          Native VST3/CLAP EQ
+  z-audio-vcsl-piano-plugin/  Native VST3/CLAP VCSL sampler piano
+  z-audio-*-plugin/           Native VST3/CLAP piano, drums, reverb, limiter, compressor
+  z-audio-webclap/            WebCLAP synth wasm + UI
+  z-audio-webclap-eq/         WebCLAP EQ wasm + UI
+  z-audio-webclap-vcsl-piano/ WebCLAP VCSL sampler piano wasm + UI
+  z-audio-webclap-*/          WebCLAP piano, drums, reverb, limiter, compressor wasm
+  wclap-plugin/               Minimal WebCLAP/CLAP runtime glue
+  xtask/                      Packaging tasks (incl. `prepare-vcsl-piano`)
 thirdparty/
-  z-audio-dsp/           DSP and synth library submodule
+  z-audio-dsp/                DSP and synth library submodule
+assets/
+  vcsl-piano/                 Generated VCSL sampler banks (see Licensing below)
 ```
 
 Generated artifacts are written under `target/` and are not tracked.
+
+## Assets & Licensing
+
+`Z Audio VCSL Piano` is built from [VCSL Keys](https://versilian-studios.com/vcsl-keys/)
+("Grand Piano, K"), which Versilian Studios LLC releases under
+[CC0](https://creativecommons.org/publicdomain/zero/1.0/) (public domain).
+
+- `docs/VCSL_Keys.zip` (the ~650MB source SFZ/FLAC archive) is **not** committed
+  to this repository; it's gitignored. Download it yourself from the VCSL Keys
+  page above and place it at `docs/VCSL_Keys.zip`.
+- `assets/vcsl-piano/grand-piano-k.bank` (the full sampler bank, ~450MB, used by
+  the native VST3/CLAP plugin) is generated locally and also gitignored.
+- `assets/vcsl-piano/grand-piano-k-dev.bank` (a small ~2.7MB preview bank — six
+  notes, mono, truncated — embedded in the WebCLAP build) **is** committed,
+  since `z-audio-webclap-vcsl-piano` needs it at compile time.
+
+Regenerate both banks from the source archive with:
+
+```powershell
+cargo xtask prepare-vcsl-piano
+```
+
+See `docs/VCSLサンプラーピアノ実装計画.md` for the full implementation plan and
+the SFZ opcode subset that's currently supported.
 
 ## Setup
 
@@ -73,6 +102,7 @@ Bundle the additional plugins:
 
 ```powershell
 cargo xtask bundle z-audio-piano-plugin --release
+cargo xtask bundle z-audio-vcsl-piano-plugin --release
 cargo xtask bundle z-audio-drums-plugin --release
 cargo xtask bundle z-audio-reverb-plugin --release
 cargo xtask bundle z-audio-limiter-plugin --release
@@ -88,6 +118,8 @@ target/bundled/Z Audio Simple EQ.vst3
 target/bundled/Z Audio Simple EQ.clap
 target/bundled/Z Audio Formula Piano.vst3
 target/bundled/Z Audio Formula Piano.clap
+target/bundled/z-audio-vcsl-piano-plugin.vst3
+target/bundled/z-audio-vcsl-piano-plugin.clap
 target/bundled/Z Audio Formula Drum Set.vst3
 target/bundled/Z Audio Formula Drum Set.clap
 target/bundled/Z Audio Parametric Reverb.vst3
@@ -115,6 +147,8 @@ target/webclap/z-audio-simple-eq.wclap/
 target/webclap/z-audio-simple-eq.wclap.tar.gz
 target/webclap/z-audio-formula-piano.wclap/
 target/webclap/z-audio-formula-piano.wclap.tar.gz
+target/webclap/z-audio-vcsl-piano.wclap/
+target/webclap/z-audio-vcsl-piano.wclap.tar.gz
 target/webclap/z-audio-formula-drums.wclap/
 target/webclap/z-audio-formula-drums.wclap.tar.gz
 target/webclap/z-audio-parametric-reverb.wclap/
@@ -148,6 +182,7 @@ custom WebCLAP UI, so their tarballs contain `module.wasm` and `plugin.json`.
 | Z Audio Simple Synth | `dev.zaudio.simple-synth` | `ZAudioSmplSynth1` | `z-audio-simple-synth.wclap.tar.gz` |
 | Z Audio Simple EQ | `dev.zaudio.simple-eq` | `ZAudioSimpleEQ01` | `z-audio-simple-eq.wclap.tar.gz` |
 | Z Audio Formula Piano | `dev.zaudio.formula-piano` | `ZAudioFormulaPno` | `z-audio-formula-piano.wclap.tar.gz` |
+| Z Audio VCSL Piano | `dev.zaudio.vcsl-piano` | `ZAudioVCSLPiano1` | `z-audio-vcsl-piano.wclap.tar.gz` |
 | Z Audio Formula Drum Set | `dev.zaudio.formula-drums` | `ZAudioDrumSet001` | `z-audio-formula-drums.wclap.tar.gz` |
 | Z Audio Parametric Reverb | `dev.zaudio.parametric-reverb` | `ZAudioParaReverb` | `z-audio-parametric-reverb.wclap.tar.gz` |
 | Z Audio Limiter | `dev.zaudio.limiter` | `ZAudioLimiter000` | `z-audio-limiter.wclap.tar.gz` |
