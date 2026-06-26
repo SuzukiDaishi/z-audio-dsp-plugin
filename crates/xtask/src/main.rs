@@ -6,6 +6,8 @@ use anyhow::{bail, Context, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
+mod vcsl_piano;
+
 struct WebClapBundle {
     package: &'static str,
     bundle_name: &'static str,
@@ -31,6 +33,12 @@ const WEBCLAP_BUNDLES: &[WebClapBundle] = &[
         bundle_name: "z-audio-formula-piano.wclap",
         crate_dir: "crates/z-audio-webclap-piano",
         wasm_file: "z_audio_webclap_piano.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-vcsl-piano",
+        bundle_name: "z-audio-vcsl-piano.wclap",
+        crate_dir: "crates/z-audio-webclap-vcsl-piano",
+        wasm_file: "z_audio_webclap_vcsl_piano.wasm",
     },
     WebClapBundle {
         package: "z-audio-webclap-drums",
@@ -62,6 +70,9 @@ fn main() -> nih_plug_xtask::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.first().map(String::as_str) == Some("bundle-webclap") {
         bundle_webclap(&args[1..])?;
+        Ok(())
+    } else if args.first().map(String::as_str) == Some("prepare-vcsl-piano") {
+        vcsl_piano::run(&args[1..])?;
         Ok(())
     } else {
         nih_plug_xtask::main()

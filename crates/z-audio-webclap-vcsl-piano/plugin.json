@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.vcsl-piano",
+  "name": "Z Audio VCSL Piano",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Sampler piano built from VCSL Keys (Grand Piano, K), packaged as a real WCLAP plugin.",
+  "features": ["instrument", "piano", "sampler", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_vcsl_piano.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 480, "height": 420 },
+    "expanded_size": { "width": 640, "height": 480 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.vcsl-piano",
+      "name": "Z Audio VCSL Piano",
+      "features": ["instrument", "piano", "sampler", "stereo"],
+      "has_ui": true
+    }
+  ]
+}

@@ -25,3 +25,7 @@ desktop.ini
 
 # Rust backup files
 **/*.rs.bk
+
+# Generated VCSL sampler bank (large; regenerate via `cargo xtask prepare-vcsl-piano`).
+# The small dev bank is committed: z-audio-webclap-vcsl-piano embeds it at build time.
+/assets/vcsl-piano/grand-piano-k.bank
