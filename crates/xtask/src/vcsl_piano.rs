@@ -41,7 +41,7 @@ const SUPPORTED_OPCODES: &[&str] = &[
 /// (highest hivel) velocity layer per note is kept, and samples are
 /// downmixed to mono and truncated, to keep the embedded bank small.
 const DEV_NOTES: &[u8] = &[36, 48, 60, 67, 72, 84];
-const DEV_MAX_SECONDS: f32 = 2.5;
+const DEV_MAX_SECONDS: f32 = 4.0;
 
 pub fn run(args: &[String]) -> Result<()> {
     nih_plug_xtask::chdir_workspace_root().context("could not chdir to workspace root")?;

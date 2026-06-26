@@ -15,7 +15,7 @@ use wclap_plugin::{
 use z_audio_dsp::{EventKind, ParamId, ParamUnit, ProcessContext, TimedEvent};
 use z_audio_synth::{VcslPiano, VcslPianoConfig, VcslSampleBank};
 
-const MAX_POLYPHONY: usize = 16;
+const MAX_POLYPHONY: usize = 32;
 const PARAM_IDS: [ParamId; 6] = [
     ParamId::VcslMasterGain,
     ParamId::VcslTone,
