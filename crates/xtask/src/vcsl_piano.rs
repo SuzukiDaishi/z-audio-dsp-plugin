@@ -10,10 +10,10 @@ use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use claxon::FlacReader;
 use z_audio_dsp::TriggerKind;
-use z_audio_synth::{VcslRegionSource, build_bank_bytes};
+use z_audio_synth::{build_bank_bytes, VcslRegionSource};
 use zip::ZipArchive;
 
 const SUPPORTED_OPCODES: &[&str] = &[
@@ -49,8 +49,8 @@ pub fn run(args: &[String]) -> Result<()> {
     let source = arg_value(args, "--source")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("docs/VCSL_Keys.zip"));
-    let instrument = arg_value(args, "--instrument")
-        .unwrap_or_else(|| "Grand Piano, K".to_string());
+    let instrument =
+        arg_value(args, "--instrument").unwrap_or_else(|| "Grand Piano, K".to_string());
     let out = arg_value(args, "--out")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("assets/vcsl-piano/grand-piano-k.bank"));
@@ -69,8 +69,8 @@ pub fn run(args: &[String]) -> Result<()> {
 
     let file = fs::File::open(&source)
         .with_context(|| format!("could not open '{}'", source.display()))?;
-    let mut archive =
-        ZipArchive::new(file).with_context(|| format!("could not read zip '{}'", source.display()))?;
+    let mut archive = ZipArchive::new(file)
+        .with_context(|| format!("could not read zip '{}'", source.display()))?;
 
     let sfz_name = format!("{instrument}.sfz");
     let sfz_text = read_zip_text(&mut archive, &sfz_name)
@@ -80,7 +80,9 @@ pub fn run(args: &[String]) -> Result<()> {
     let raw_regions = parse_sfz(&sfz_text, &mut unsupported);
     eprintln!("Parsed {} region(s) from '{sfz_name}'", raw_regions.len());
     for (opcode, count) in &unsupported {
-        eprintln!("  note: opcode '{opcode}' seen {count} time(s) but is not applied by the MVP sampler");
+        eprintln!(
+            "  note: opcode '{opcode}' seen {count} time(s) but is not applied by the MVP sampler"
+        );
     }
 
     let mut decoded_cache: HashMap<String, (f32, u8, std::sync::Arc<Vec<f32>>)> = HashMap::new();
@@ -257,14 +259,20 @@ fn parse_sfz(text: &str, unsupported: &mut HashMap<String, usize>) -> Vec<HashMa
     regions
 }
 
-fn read_zip_text<R: Read + std::io::Seek>(archive: &mut ZipArchive<R>, name: &str) -> Result<String> {
+fn read_zip_text<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+) -> Result<String> {
     let mut file = archive.by_name(name)?;
     let mut text = String::new();
     file.read_to_string(&mut text)?;
     Ok(text)
 }
 
-fn read_zip_bytes<R: Read + std::io::Seek>(archive: &mut ZipArchive<R>, name: &str) -> Result<Vec<u8>> {
+fn read_zip_bytes<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+    name: &str,
+) -> Result<Vec<u8>> {
     let mut file = archive.by_name(name)?;
     let mut bytes = Vec::with_capacity(file.size() as usize);
     file.read_to_end(&mut bytes)?;
@@ -278,7 +286,8 @@ fn decode_flac(bytes: &[u8]) -> Result<(f32, u8, Vec<f32>)> {
     let channels = info.channels as u8;
     let scale = 1.0_f32 / (1_i64 << (info.bits_per_sample - 1)) as f32;
 
-    let mut pcm = Vec::with_capacity((info.samples.unwrap_or(0) as usize) * channels.max(1) as usize);
+    let mut pcm =
+        Vec::with_capacity((info.samples.unwrap_or(0) as usize) * channels.max(1) as usize);
     for sample in reader.samples() {
         let sample = sample.context("FLAC decode error")?;
         pcm.push(sample as f32 * scale);
@@ -491,8 +500,14 @@ sample=b.flac
         // Second region falls through to the group's volume.
         assert_eq!(regions[1].get("volume").map(String::as_str), Some("2"));
         // Both inherit the group-level trigger.
-        assert_eq!(regions[0].get("trigger").map(String::as_str), Some("attack"));
-        assert_eq!(regions[1].get("trigger").map(String::as_str), Some("attack"));
+        assert_eq!(
+            regions[0].get("trigger").map(String::as_str),
+            Some("attack")
+        );
+        assert_eq!(
+            regions[1].get("trigger").map(String::as_str),
+            Some("attack")
+        );
     }
 
     #[test]
@@ -545,8 +560,14 @@ sample=b.flac
         let mut unsupported = HashMap::new();
         let regions = parse_sfz(text, &mut unsupported);
         assert_eq!(regions.len(), 2);
-        assert_eq!(regions[0].get("trigger").map(String::as_str), Some("attack"));
-        assert_eq!(regions[1].get("trigger").map(String::as_str), Some("release"));
+        assert_eq!(
+            regions[0].get("trigger").map(String::as_str),
+            Some("attack")
+        );
+        assert_eq!(
+            regions[1].get("trigger").map(String::as_str),
+            Some("release")
+        );
     }
 
     #[test]
@@ -601,7 +622,10 @@ sample=b.flac
             region_source(60, 60, 127, TriggerKind::Attack, 1, vec![2.0; 100]),
         ];
         let dev = build_dev_bank(&sources);
-        let attack: Vec<_> = dev.iter().filter(|r| r.trigger == TriggerKind::Attack).collect();
+        let attack: Vec<_> = dev
+            .iter()
+            .filter(|r| r.trigger == TriggerKind::Attack)
+            .collect();
         assert_eq!(attack.len(), 1);
         assert_eq!(attack[0].hivel, 127); // re-widened to full range in the dev bank
         assert!(attack[0].pcm.iter().all(|s| *s == 2.0));
@@ -632,7 +656,10 @@ sample=b.flac
             .map(|&note| region_source(note, note, 127, TriggerKind::Attack, 1, vec![1.0; 10]))
             .collect();
         let dev = build_dev_bank(&sources);
-        let attack: Vec<_> = dev.iter().filter(|r| r.trigger == TriggerKind::Attack).collect();
+        let attack: Vec<_> = dev
+            .iter()
+            .filter(|r| r.trigger == TriggerKind::Attack)
+            .collect();
         assert_eq!(attack.len(), DEV_NOTES.len());
         // Full MIDI range should be covered with no gaps and no overlaps.
         assert_eq!(attack[0].lokey, 0);
@@ -652,7 +679,14 @@ sample=b.flac
     fn build_dev_bank_skips_notes_with_no_covering_source() {
         // No source covers any DEV_NOTES key, so the dev bank should end up
         // empty rather than panicking.
-        let sources = vec![region_source(0, 5, 127, TriggerKind::Attack, 1, vec![1.0; 10])];
+        let sources = vec![region_source(
+            0,
+            5,
+            127,
+            TriggerKind::Attack,
+            1,
+            vec![1.0; 10],
+        )];
         let dev = build_dev_bank(&sources);
         assert!(dev.is_empty());
     }

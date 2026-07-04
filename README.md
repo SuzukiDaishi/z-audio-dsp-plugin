@@ -161,6 +161,20 @@ target/webclap/z-audio-compressor.wclap.tar.gz
 
 Use the `.wclap.tar.gz` files when testing with WebCLAP hosts such as Plinken.
 
+Run the local first-party WebCLAP host:
+
+```powershell
+python apps/z-audio-wclap-host/server.py 8765
+```
+
+Then open `http://127.0.0.1:8765/apps/z-audio-wclap-host/` and drop a
+`target/webclap/*.wclap.tar.gz` bundle onto a chain slot. The host keeps
+Audio -> Audio, MIDI -> MIDI, MIDI -> Audio, and Audio -> MIDI plugins in the
+same 4-slot WebCLAP chain, so instruments and effects can be tested together.
+The built-in source can generate sine, triangle, white noise, pink noise, or
+brown noise, or play a browser-decodable audio file through the chain. Web MIDI
+input is available from the source panel when the browser and device allow it.
+
 The synth, EQ, reverb, limiter, and compressor tarballs contain these paths at
 archive root:
 
@@ -204,7 +218,7 @@ exist in the DSP/API layer, but they are not shown in the WebCLAP synth UI.
 
 ### EQ
 
-The EQ has three serial Butterworth bands:
+The EQ has three serial EQ bands:
 
 - Low
 - Mid
@@ -213,7 +227,7 @@ The EQ has three serial Butterworth bands:
 Each band exposes:
 
 - Enabled
-- Type: Low Pass / Band Pass / High Pass
+- Type: Low Shelf / Bell / High Shelf / High Pass / Low Pass
 - Frequency
 - Gain dB
 - Q

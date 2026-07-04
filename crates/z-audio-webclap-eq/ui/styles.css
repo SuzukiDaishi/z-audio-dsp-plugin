@@ -325,6 +325,14 @@ h1 {
   min-width: 0;
 }
 
+.control.is-disabled {
+  opacity: 0.42;
+}
+
+.control.is-disabled input {
+  cursor: not-allowed;
+}
+
 .control-label {
   font-size: 10px;
   font-weight: 850;

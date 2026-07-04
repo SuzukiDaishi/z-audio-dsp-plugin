@@ -34,3 +34,8 @@ desktop.ini
 # Generated VCSL sampler bank (large; regenerate via `cargo xtask prepare-vcsl-piano`).
 # The small dev bank is committed: z-audio-webclap-vcsl-piano embeds it at build time.
 /assets/vcsl-piano/grand-piano-k.bank
+
+# Generated generic sampler bank (large; regenerate via
+# `cargo xtask prepare-sampler-bank`). The small dev bank is committed:
+# z-audio-webclap-sampler embeds it at build time.
+/assets/sampler/piano.bank

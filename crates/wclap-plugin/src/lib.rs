@@ -674,11 +674,6 @@ struct DefSnapshot {
     ui_path_ptr: *const u8,
     /// Path length in bytes, EXCLUDING the trailing NUL.
     ui_path_len: u32,
-    /// Pointer to the host-supplied `modulePath` C-string, captured during
-    /// `entry.init`. Lives in plugin memory (host allocated it via our
-    /// `malloc` and copied the bytes; it remains valid for our lifetime).
-    /// Zero until `entry.init` runs.
-    module_path_ptr: u32,
     /// `Plugin::params()` slice base + length. Cached at `init_plugin<P>`
     /// time so the C-ABI shims don't need to monomorphise on P themselves.
     params_ptr: *const ParamDef,
@@ -700,7 +695,6 @@ static mut DEF: DefSnapshot = DefSnapshot {
     id_ptr: core::ptr::null(),
     ui_path_ptr: core::ptr::null(),
     ui_path_len: 0,
-    module_path_ptr: 0,
     params_ptr: core::ptr::null(),
     params_len: 0,
     host_ptr: 0,
@@ -754,6 +748,7 @@ pub fn init_plugin<P: Plugin>(def: &'static PluginDef) {
     );
     unsafe {
         clap_entry.init = entry_init as usize as u32;
+        clap_entry.deinit = entry_deinit as *const () as usize as u32;
         clap_entry.get_factory = entry_get_factory as usize as u32;
 
         FACTORY.get_plugin_count = factory_get_plugin_count as usize as u32;
@@ -1004,16 +999,11 @@ unsafe fn channel_slice(
 // clap_entry — init / get_factory
 // ---------------------------------------------------------------------------
 
-extern "C" fn entry_init(plugin_path_ptr: u32) -> u32 {
-    // The host passes us the per-instance modulePath (e.g.
-    // `/plugin/<hash>`) here. We stash it so `webview.get_uri` can build
-    // the absolute URI `file:<modulePath><ui_path>` that resolves through
-    // the SW proxy to the tarball's file map.
-    unsafe {
-        DEF.module_path_ptr = plugin_path_ptr;
-    }
+extern "C" fn entry_init(_plugin_path_ptr: u32) -> u32 {
     1
 }
+
+extern "C" fn entry_deinit() {}
 
 extern "C" fn entry_get_factory(id_ptr: u32) -> u32 {
     if cstr_eq(id_ptr, FACTORY_ID) {
@@ -1394,17 +1384,14 @@ extern "C" fn note_ports_get(_plugin: u32, index: u32, is_input: u32, info_ptr: 
 
 const WEBVIEW_URI_PREFIX: &[u8] = b"file:";
 
-fn write_webview_uri(module_path: &[u8], ui_path: &[u8], out: &mut [u8]) -> u32 {
-    let uri_len = WEBVIEW_URI_PREFIX
-        .len()
-        .saturating_add(module_path.len())
-        .saturating_add(ui_path.len());
+fn write_webview_uri(ui_path: &[u8], out: &mut [u8]) -> u32 {
+    let uri_len = WEBVIEW_URI_PREFIX.len().saturating_add(ui_path.len());
     let required = uri_len.saturating_add(1);
 
     if !out.is_empty() {
         let writable = core::cmp::min(uri_len, out.len().saturating_sub(1));
         let mut written = 0usize;
-        for segment in [WEBVIEW_URI_PREFIX, module_path, ui_path] {
+        for segment in [WEBVIEW_URI_PREFIX, ui_path] {
             if written >= writable {
                 break;
             }
@@ -1418,52 +1405,25 @@ fn write_webview_uri(module_path: &[u8], ui_path: &[u8], out: &mut [u8]) -> u32 
     required as u32
 }
 
-/// Compose `file:<modulePath><ui_path>` into the host-supplied buffer.
+/// Compose `file:<ui_path>` into the host-supplied buffer.
 /// Two-call probe: `cap == 0` returns required byte length including the
 /// trailing NUL; `cap > 0` writes bytes (clamped) and terminates.
-///
-/// `modulePath` comes from `entry.init`; without it the URI would be
-/// `file:<ui_path>` which the SW proxy fails to match against the file
-/// map (which is keyed by `/plugin/<hash>/...`).
 extern "C" fn webview_get_uri(_plugin_ptr: u32, buf_ptr: u32, cap: u32) -> i32 {
     let (ui_ptr, ui_len) = unsafe { (DEF.ui_path_ptr, DEF.ui_path_len) };
     if ui_ptr.is_null() {
         return 0;
     }
-    let module_ptr = unsafe { DEF.module_path_ptr };
-    let module_len = if module_ptr == 0 {
-        0
-    } else {
-        cstr_len(module_ptr)
-    };
 
-    let required = WEBVIEW_URI_PREFIX.len() as u32 + module_len + ui_len + 1;
+    let required = WEBVIEW_URI_PREFIX.len() as u32 + ui_len + 1;
 
     if cap == 0 || buf_ptr == 0 {
         return required as i32;
     }
 
     unsafe {
-        let module_path = if module_ptr == 0 || module_len == 0 {
-            &[]
-        } else {
-            core::slice::from_raw_parts(module_ptr as *const u8, module_len as usize)
-        };
         let ui_path = core::slice::from_raw_parts(ui_ptr, ui_len as usize);
         let out = core::slice::from_raw_parts_mut(buf_ptr as *mut u8, cap as usize);
-        write_webview_uri(module_path, ui_path, out) as i32
-    }
-}
-
-/// strlen for a u32-addressed NUL-terminated string in our linear memory.
-fn cstr_len(ptr: u32) -> u32 {
-    let mut n = 0u32;
-    loop {
-        let b = unsafe { *((ptr + n) as *const u8) };
-        if b == 0 {
-            return n;
-        }
-        n += 1;
+        write_webview_uri(ui_path, out) as i32
     }
 }
 
@@ -1473,10 +1433,10 @@ mod tests {
 
     #[test]
     fn webview_uri_writer_returns_nul_inclusive_len_and_full_uri() {
-        let expected = b"file:/plugin/abc/ui/index.html\0";
+        let expected = b"file:/ui/index.html\0";
         let mut out = std::vec![0u8; expected.len()];
 
-        let required = write_webview_uri(b"/plugin/abc", b"/ui/index.html", &mut out);
+        let required = write_webview_uri(b"/ui/index.html", &mut out);
 
         assert_eq!(required as usize, expected.len());
         assert_eq!(&out[..], expected);
@@ -1484,10 +1444,10 @@ mod tests {
 
     #[test]
     fn webview_uri_writer_reports_required_len_for_short_buffers() {
-        let expected = b"file:/plugin/abc/ui/index.html\0";
+        let expected = b"file:/ui/index.html\0";
         let mut out = std::vec![0u8; 8];
 
-        let required = write_webview_uri(b"/plugin/abc", b"/ui/index.html", &mut out);
+        let required = write_webview_uri(b"/ui/index.html", &mut out);
 
         assert_eq!(required as usize, expected.len());
         assert_eq!(out[7], 0);
@@ -1634,7 +1594,7 @@ extern "C" fn params_get_value(plugin_ptr: u32, id: u32, out_ptr: u32) -> u32 {
 extern "C" fn params_value_to_text(
     _plugin_ptr: u32,
     _id: u32,
-    _value: u64,
+    _value: f64,
     _buf_ptr: u32,
     _cap: u32,
 ) -> u32 {

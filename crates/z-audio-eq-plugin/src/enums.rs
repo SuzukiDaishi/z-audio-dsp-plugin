@@ -3,9 +3,16 @@ use z_audio_dsp::ButterworthKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum ButterworthKindParam {
+    #[name = "Low Shelf"]
     LowPass,
+    #[name = "Bell"]
     BandPass,
+    #[name = "High Shelf"]
     HighPass,
+    #[name = "High Pass"]
+    HighPassFilter,
+    #[name = "Low Pass"]
+    LowPassFilter,
 }
 
 impl From<ButterworthKindParam> for ButterworthKind {

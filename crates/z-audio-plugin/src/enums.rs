@@ -108,14 +108,21 @@ impl From<LfoTarget> for LfoTargetParam {
     }
 }
 
-/// Shared filter-shape enum for the low/mid/high EQ bands. Each band stores its own
+/// Shared EQ-shape enum for the low/mid/high EQ bands. Each band stores its own
 /// [`ButterworthKind`] value, but the set of choices (and their order) is identical, so a single
 /// wrapper type is reused across all three `EnumParam`s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum ButterworthKindParam {
+    #[name = "Low Shelf"]
     LowPass,
+    #[name = "Bell"]
     BandPass,
+    #[name = "High Shelf"]
     HighPass,
+    #[name = "High Pass"]
+    HighPassFilter,
+    #[name = "Low Pass"]
+    LowPassFilter,
 }
 
 impl From<ButterworthKindParam> for ButterworthKind {

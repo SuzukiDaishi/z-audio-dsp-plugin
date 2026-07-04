@@ -6,6 +6,7 @@ use anyhow::{bail, Context, Result};
 use flate2::write::GzEncoder;
 use flate2::Compression;
 
+mod sampler_bank;
 mod vcsl_piano;
 
 struct WebClapBundle {
@@ -41,6 +42,12 @@ const WEBCLAP_BUNDLES: &[WebClapBundle] = &[
         wasm_file: "z_audio_webclap_vcsl_piano.wasm",
     },
     WebClapBundle {
+        package: "z-audio-webclap-sampler",
+        bundle_name: "z-audio-sampler.wclap",
+        crate_dir: "crates/z-audio-webclap-sampler",
+        wasm_file: "z_audio_webclap_sampler.wasm",
+    },
+    WebClapBundle {
         package: "z-audio-webclap-drums",
         bundle_name: "z-audio-formula-drums.wclap",
         crate_dir: "crates/z-audio-webclap-drums",
@@ -51,6 +58,12 @@ const WEBCLAP_BUNDLES: &[WebClapBundle] = &[
         bundle_name: "z-audio-parametric-reverb.wclap",
         crate_dir: "crates/z-audio-webclap-reverb",
         wasm_file: "z_audio_webclap_reverb.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-diffuser",
+        bundle_name: "z-audio-diffuser.wclap",
+        crate_dir: "crates/z-audio-webclap-diffuser",
+        wasm_file: "z_audio_webclap_diffuser.wasm",
     },
     WebClapBundle {
         package: "z-audio-webclap-limiter",
@@ -73,6 +86,9 @@ fn main() -> nih_plug_xtask::Result<()> {
         Ok(())
     } else if args.first().map(String::as_str) == Some("prepare-vcsl-piano") {
         vcsl_piano::run(&args[1..])?;
+        Ok(())
+    } else if args.first().map(String::as_str) == Some("prepare-sampler-bank") {
+        sampler_bank::run(&args[1..])?;
         Ok(())
     } else {
         nih_plug_xtask::main()

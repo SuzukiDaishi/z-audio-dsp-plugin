@@ -80,7 +80,9 @@ fn band_section(
                 bool_checkbox(ui, "Enabled", enabled, setter);
                 slider(ui, "Frequency", freq, setter);
                 enum_combo::<ButterworthKindParam>(ui, "Type", kind, setter);
-                slider(ui, "Gain", gain_db, setter);
+                ui.add_enabled_ui(kind.value().to_index() < 3, |ui| {
+                    slider(ui, "Gain", gain_db, setter);
+                });
                 slider(ui, "Q", q, setter);
             });
         });

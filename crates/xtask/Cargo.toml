@@ -8,6 +8,7 @@ publish = false
 anyhow = "1"
 claxon = "0.4"
 flate2 = "1"
+hound = "3.5"
 nih_plug_xtask = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
 tar = "0.4"
 z-audio-dsp = { path = "../../thirdparty/z-audio-dsp/crates/z-audio-dsp" }

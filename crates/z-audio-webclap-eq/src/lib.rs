@@ -1,10 +1,9 @@
 //! Z Audio Simple EQ, packaged as a real WCLAP audio-effect plugin.
 //!
 //! A thin `wclap-plugin` (see `crates/wclap-plugin`) front end around
-//! `z-audio-dsp::ThreeBandButterworthEq` — three independently switchable
-//! Butterworth filters (low-pass / band-pass / high-pass), connected in
-//! series, exposed as `clap.params`. All three bands start disabled
-//! (pass-through); see `ThreeBandButterworthEq::new`'s doc comment for why.
+//! `z-audio-dsp::ThreeBandButterworthEq` - three independently switchable
+//! EQ bands (low shelf / bell / high shelf / high-pass / low-pass), exposed
+//! as `clap.params`.
 //!
 //! Sibling to `crates/z-audio-webclap` (the instrument); this one is a pure
 //! audio_in -> audio_out effect with no note input.
@@ -25,7 +24,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     vendor: b"zukky\0",
     url: b"https://github.com/SuzukiDaishi/z-audio-dsp\0",
     version: b"0.1.0\0",
-    description: b"A simple 3-band EQ (low-pass / band-pass / high-pass) built on z-audio-dsp\0",
+    description: b"A simple 3-band EQ (low shelf / bell / high shelf / high-pass / low-pass) built on z-audio-dsp\0",
     features: &[b"audio-effect\0", b"equalizer\0", b"eq\0"],
     audio_inputs: 1,
     audio_outputs: 1,

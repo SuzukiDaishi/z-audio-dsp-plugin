@@ -1,3 +1,9 @@
 [submodule "thirdparty/z-audio-dsp"]
 	path = thirdparty/z-audio-dsp
 	url = https://github.com/SuzukiDaishi/z-audio-dsp.git
+[submodule "thirdparty/wclap-host-js"]
+	path = thirdparty/wclap-host-js
+	url = https://github.com/WebCLAP/wclap-host-js.git
+[submodule "thirdparty/browser-test-host"]
+	path = thirdparty/browser-test-host
+	url = https://github.com/WebCLAP/browser-test-host.git

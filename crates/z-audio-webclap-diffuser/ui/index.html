@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z Audio Diffuser</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>Diffuser</h1>
+          <p class="eyebrow">Z AUDIO PHASE</p>
+        </div>
+        <span id="status">Waiting for host</span>
+      </header>
+      <section class="graph-panel" aria-label="Allpass diffuser">
+        <svg viewBox="0 0 760 246" preserveAspectRatio="none" aria-hidden="true">
+          <g id="stage-lines"></g>
+          <path id="energy-line"></path>
+          <g id="delay-markers"></g>
+        </svg>
+      </section>
+      <form id="controls" class="controls" autocomplete="off"></form>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

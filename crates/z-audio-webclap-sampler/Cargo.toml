@@ -1,0 +1,15 @@
+[package]
+name = "z-audio-webclap-sampler"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+description = "General-purpose single-sample sampler instrument, packaged as a real WCLAP plugin."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wclap-plugin = { path = "../wclap-plugin", default-features = false }
+z-audio-dsp = { path = "../../thirdparty/z-audio-dsp/crates/z-audio-dsp" }
+z-audio-synth = { path = "../../thirdparty/z-audio-dsp/crates/z-audio-synth" }

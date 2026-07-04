@@ -13,6 +13,9 @@ name = "Z Audio Formula Drum Set"
 [z-audio-reverb-plugin]
 name = "Z Audio Parametric Reverb"
 
+[z-audio-diffuser-plugin]
+name = "Z Audio Diffuser"
+
 [z-audio-limiter-plugin]
 name = "Z Audio Limiter"
 

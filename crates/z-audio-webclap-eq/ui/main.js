@@ -12,7 +12,7 @@ const DB_MAX = 24;
 const FREQ_MIN = 20;
 const FREQ_MAX = 20000;
 
-const TYPE_LABELS = ["Low Pass", "Band Pass", "High Pass"];
+const TYPE_LABELS = ["Low Shelf", "Bell", "High Shelf", "High Pass", "Low Pass"];
 
 const BANDS = [
   {
@@ -230,6 +230,10 @@ function formatValue(def, value) {
   return Number(value).toFixed(2);
 }
 
+function isPassFilterType(value) {
+  return clamp(Math.round(value), 0, TYPE_LABELS.length - 1) >= 3;
+}
+
 function sendSet(id, value) {
   window.parent.postMessage(encodeSet(id, value), "*");
 }
@@ -329,6 +333,11 @@ function createControl(band, role) {
     queueGraphUpdate();
   }
 
+  function setDisabled(disabled) {
+    input.disabled = disabled;
+    wrap.classList.toggle("is-disabled", disabled);
+  }
+
   const eventName = def.kind === "range" ? "input" : "change";
   input.addEventListener(eventName, () => {
     selectedBand.key = band.key;
@@ -339,7 +348,7 @@ function createControl(band, role) {
   });
 
   paint(def.default);
-  controls.set(def.id, { def, band, role, paint });
+  controls.set(def.id, { def, band, role, paint, setDisabled });
   return wrap;
 }
 
@@ -401,35 +410,63 @@ function bandFillPath(points) {
   )} ${zero.toFixed(1)} Z`;
 }
 
-function biquadCoefficients(type, freq, q) {
+function biquadCoefficients(type, freq, q, gainDb) {
+  const a = 10 ** (gainDb / 40);
+  const sqrtA = Math.sqrt(a);
   const w0 = (2 * Math.PI * freq) / SAMPLE_RATE;
   const cos = Math.cos(w0);
   const alpha = Math.sin(w0) / (2 * q);
+  const twoSqrtAAlpha = 2 * sqrtA * alpha;
   let b0;
   let b1;
   let b2;
+  let a0;
+  let a1;
+  let a2;
 
   if (type === 0) {
-    b0 = (1 - cos) / 2;
-    b1 = 1 - cos;
-    b2 = (1 - cos) / 2;
+    b0 = a * (a + 1 - (a - 1) * cos + twoSqrtAAlpha);
+    b1 = 2 * a * (a - 1 - (a + 1) * cos);
+    b2 = a * (a + 1 - (a - 1) * cos - twoSqrtAAlpha);
+    a0 = a + 1 + (a - 1) * cos + twoSqrtAAlpha;
+    a1 = -2 * (a - 1 + (a + 1) * cos);
+    a2 = a + 1 + (a - 1) * cos - twoSqrtAAlpha;
   } else if (type === 1) {
-    b0 = alpha;
-    b1 = 0;
-    b2 = -alpha;
-  } else {
+    b0 = 1 + alpha * a;
+    b1 = -2 * cos;
+    b2 = 1 - alpha * a;
+    a0 = 1 + alpha / a;
+    a1 = -2 * cos;
+    a2 = 1 - alpha / a;
+  } else if (type === 2) {
+    b0 = a * (a + 1 + (a - 1) * cos + twoSqrtAAlpha);
+    b1 = -2 * a * (a - 1 + (a + 1) * cos);
+    b2 = a * (a + 1 + (a - 1) * cos - twoSqrtAAlpha);
+    a0 = a + 1 - (a - 1) * cos + twoSqrtAAlpha;
+    a1 = 2 * (a - 1 - (a + 1) * cos);
+    a2 = a + 1 - (a - 1) * cos - twoSqrtAAlpha;
+  } else if (type === 3) {
     b0 = (1 + cos) / 2;
     b1 = -(1 + cos);
     b2 = (1 + cos) / 2;
+    a0 = 1 + alpha;
+    a1 = -2 * cos;
+    a2 = 1 - alpha;
+  } else {
+    b0 = (1 - cos) / 2;
+    b1 = 1 - cos;
+    b2 = (1 - cos) / 2;
+    a0 = 1 + alpha;
+    a1 = -2 * cos;
+    a2 = 1 - alpha;
   }
 
-  const a0 = 1 + alpha;
   return {
     b0: b0 / a0,
     b1: b1 / a0,
     b2: b2 / a0,
-    a1: (-2 * cos) / a0,
-    a2: (1 - alpha) / a0,
+    a1: a1 / a0,
+    a2: a2 / a0,
   };
 }
 
@@ -437,7 +474,8 @@ function responseDbForState(state, freq) {
   if (!state || state.enabled < 0.5) return 0;
   const f0 = clamp(state.freq, FREQ_MIN, SAMPLE_RATE * 0.45);
   const q = clamp(state.q, 0.1, 10);
-  const coeffs = biquadCoefficients(Math.round(state.type), f0, q);
+  const type = clamp(Math.round(state.type), 0, TYPE_LABELS.length - 1);
+  const coeffs = biquadCoefficients(type, f0, q, clamp(state.gain, DB_MIN, DB_MAX));
   const w = (2 * Math.PI * freq) / SAMPLE_RATE;
   const c1 = Math.cos(-w);
   const s1 = Math.sin(-w);
@@ -449,7 +487,7 @@ function responseDbForState(state, freq) {
   const di = coeffs.a1 * s1 + coeffs.a2 * s2;
   const numerator = Math.sqrt(nr * nr + ni * ni);
   const denominator = Math.max(1e-9, Math.sqrt(dr * dr + di * di));
-  return 20 * Math.log10(Math.max(1e-9, numerator / denominator)) + state.gain;
+  return 20 * Math.log10(Math.max(1e-9, numerator / denominator));
 }
 
 function drawGrid() {
@@ -568,9 +606,10 @@ function paintGraph() {
     const node = document.querySelector(`.node-${band.key}`);
     if (!node || !state) continue;
     const x = xForFreq(state.freq);
-    const y = yForDb(state.enabled >= 0.5 ? state.gain : 0);
+    const y = yForDb(state.enabled >= 0.5 ? responseDbForState(state, state.freq) : 0);
     node.setAttribute("transform", `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
     node.classList.toggle("is-off", state.enabled < 0.5);
+    controls.get(band.gain.id)?.setDisabled(isPassFilterType(state.type));
   }
 }
 
@@ -583,9 +622,13 @@ function paintBandSelection() {
     const state = stateFor(band);
     const summary = card?.querySelector(".band-header small");
     if (summary && state) {
-      summary.textContent = `${formatFreq(state.freq)} ${state.gain >= 0 ? "+" : ""}${state.gain.toFixed(
-        1,
-      )} dB`;
+      if (isPassFilterType(state.type)) {
+        summary.textContent = `${formatFreq(state.freq)} ${formatValue(band.type, state.type)}`;
+      } else {
+        summary.textContent = `${formatFreq(state.freq)} ${
+          state.gain >= 0 ? "+" : ""
+        }${state.gain.toFixed(1)} dB`;
+      }
     }
   }
 }
