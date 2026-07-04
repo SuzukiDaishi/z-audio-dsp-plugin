@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Z Audio WebCLAP Host</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <script src="./page-proxy-service-worker.js"></script>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">WebCLAP Host</p>
+          <h1>Z Audio Host</h1>
+        </div>
+        <div class="transport">
+          <button id="start-button" class="primary" type="button">Start</button>
+          <button id="stop-button" type="button">Stop</button>
+          <label class="volume-control">
+            <span>vol</span>
+            <input id="volume-slider" type="range" min="-48" max="6" step="0.1" value="-6">
+            <output id="volume-readout">-6.0 dB</output>
+          </label>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="panel source-panel" aria-labelledby="source-title">
+          <div class="panel-heading">
+            <p class="eyebrow">Source</p>
+            <h2 id="source-title">Input</h2>
+          </div>
+
+          <div class="segmented" role="group" aria-label="Source mode">
+            <button id="tone-source-button" class="active" type="button">Tone</button>
+            <button id="file-source-button" type="button">Audio File</button>
+          </div>
+
+          <div class="tone-controls">
+            <label>
+              <span>Signal</span>
+              <select id="signal-kind">
+                <option value="sine">Sine</option>
+                <option value="triangle">Triangle</option>
+                <option value="white">White noise</option>
+                <option value="pink">Pink noise</option>
+                <option value="brown">Brown noise</option>
+              </select>
+              <output id="signal-kind-readout">Sine</output>
+            </label>
+            <label>
+              <span>Frequency</span>
+              <input id="tone-frequency" type="range" min="55" max="1760" step="1" value="440">
+              <output id="tone-frequency-readout">440 Hz</output>
+            </label>
+          </div>
+
+          <div id="audio-drop" class="file-drop-zone" tabindex="0">
+            <input id="audio-file-input" type="file" accept="audio/*">
+            <strong>Drop audio here</strong>
+            <span id="audio-file-name">No audio file loaded</span>
+          </div>
+
+          <audio id="audio-element" preload="metadata" crossorigin="anonymous"></audio>
+
+          <div class="media-controls">
+            <label class="check-row">
+              <input id="loop-toggle" type="checkbox" checked>
+              <span>Loop</span>
+            </label>
+            <label>
+              <span>Position</span>
+              <input id="seek-slider" type="range" min="0" max="1" step="0.001" value="0">
+              <output id="time-readout">0:00 / 0:00</output>
+            </label>
+          </div>
+
+          <div class="midi-controls">
+            <label>
+              <span>MIDI In</span>
+              <select id="midi-input-select">
+                <option value="">No device</option>
+              </select>
+            </label>
+            <div class="midi-actions">
+              <button id="midi-rescan-button" type="button">Rescan</button>
+              <button id="midi-all-notes-off-button" type="button">All notes off</button>
+            </div>
+            <p id="midi-status">MIDI idle</p>
+          </div>
+        </section>
+
+        <section class="panel chain-panel" aria-labelledby="chain-title">
+          <div class="panel-heading">
+            <p class="eyebrow">Plugin Chain</p>
+            <h2 id="chain-title">Audio + MIDI</h2>
+          </div>
+          <div id="slots" class="slot-list" aria-label="WebCLAP plugin slots"></div>
+        </section>
+
+        <section class="panel status-panel" aria-labelledby="status-title">
+          <div class="panel-heading">
+            <p class="eyebrow">Status</p>
+            <h2 id="status-title">Runtime</h2>
+          </div>
+          <dl class="status-grid">
+            <div><dt>State</dt><dd id="status-line">Idle</dd></div>
+            <div><dt>Sample rate</dt><dd id="sample-rate">-</dd></div>
+            <div><dt>Cross-origin isolated</dt><dd id="isolation-state">-</dd></div>
+            <div><dt>CPU</dt><dd id="cpu-readout">-</dd></div>
+          </dl>
+          <div class="meters">
+            <label><span>L</span><meter id="meter-l" min="0" max="1" value="0"></meter></label>
+            <label><span>R</span><meter id="meter-r" min="0" max="1" value="0"></meter></label>
+          </div>
+          <div id="shelf" class="shelf">
+            <p class="shelf-title">Shelf</p>
+            <span class="shelf-empty">Scanning target/webclap...</span>
+          </div>
+        </section>
+      </main>
+
+      <section class="details panel" aria-label="Selected plugin details">
+        <div class="details-tabs" role="tablist">
+          <button id="params-tab" class="active" type="button">Parameters</button>
+          <button id="ui-tab" type="button">UI</button>
+        </div>
+        <div id="params-panel" class="plugin-panel"></div>
+        <div id="ui-panel" class="plugin-panel hidden"></div>
+      </section>
+    </div>
+
+    <div id="floating-panels" class="floating-panels" aria-live="polite"></div>
+    <div id="drop-overlay">Drop to load</div>
+    <script type="module" src="./main.js?v=z-audio-host-6"></script>
+  </body>
+</html>
