@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="--accent: #f06a58; --accent-soft: rgba(240, 106, 88, 0.16)">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -11,20 +11,27 @@
       <header class="plugin-header">
         <div class="title-row">
           <h1>Limiter</h1>
-          <p class="eyebrow">Z AUDIO DYNAMICS</p>
+          <p class="eyebrow">Z AUDIO EFFECT</p>
         </div>
-        <span id="status">Waiting for host</span>
+        <div class="header-right">
+          <span class="header-note">drag curve: threshold / ceiling</span>
+          <span id="status">Waiting for host</span>
+        </div>
       </header>
-      <section class="graph-panel" aria-label="Limiter curve">
-        <svg viewBox="0 0 760 250" preserveAspectRatio="none" aria-hidden="true">
-          <g id="grid"></g>
-          <path id="unity-line"></path>
-          <path id="curve-line"></path>
-          <line id="threshold-line" />
-          <line id="ceiling-line" />
-        </svg>
-      </section>
-      <form id="controls" class="controls" autocomplete="off"></form>
+
+      <div class="viz" style="min-height: 120px">
+        <canvas id="viz" title="Drag: threshold (←→) / ceiling (↑↓)"></canvas>
+        <span class="viz-caption">Transfer curve</span>
+      </div>
+
+      <div class="panels cols-2">
+        <section class="section" id="sec-gain">
+          <h2 class="section-title">Gain Staging</h2>
+        </section>
+        <section class="section" id="sec-time">
+          <h2 class="section-title">Behaviour</h2>
+        </section>
+      </div>
     </main>
     <script type="module" src="./main.js"></script>
   </body>

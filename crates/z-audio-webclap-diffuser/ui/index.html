@@ -1,10 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="--accent: #4fc8d1; --accent-soft: rgba(79, 200, 209, 0.16)">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Z Audio Diffuser</title>
-    <link rel="icon" href="data:," />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -12,18 +11,27 @@
       <header class="plugin-header">
         <div class="title-row">
           <h1>Diffuser</h1>
-          <p class="eyebrow">Z AUDIO PHASE</p>
+          <p class="eyebrow">Z AUDIO EFFECT</p>
         </div>
-        <span id="status">Waiting for host</span>
+        <div class="header-right">
+          <span class="header-note">drag scatter: size / diffusion</span>
+          <span id="status">Waiting for host</span>
+        </div>
       </header>
-      <section class="graph-panel" aria-label="Allpass diffuser">
-        <svg viewBox="0 0 760 246" preserveAspectRatio="none" aria-hidden="true">
-          <g id="stage-lines"></g>
-          <path id="energy-line"></path>
-          <g id="delay-markers"></g>
-        </svg>
-      </section>
-      <form id="controls" class="controls" autocomplete="off"></form>
+
+      <div class="viz" style="min-height: 126px">
+        <canvas id="viz" title="Drag: size (←→) / diffusion (↑↓)"></canvas>
+        <span class="viz-caption">Echo density</span>
+      </div>
+
+      <div class="panels cols-2">
+        <section class="section" id="sec-diff">
+          <h2 class="section-title">Diffusion Network</h2>
+        </section>
+        <section class="section" id="sec-out">
+          <h2 class="section-title">Output</h2>
+        </section>
+      </div>
     </main>
     <script type="module" src="./main.js"></script>
   </body>

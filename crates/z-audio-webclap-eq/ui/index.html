@@ -1,10 +1,24 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="--accent: #4fd1a5; --accent-soft: rgba(79, 209, 165, 0.16)">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Z Audio Simple EQ</title>
     <link rel="stylesheet" href="./styles.css" />
+    <style>
+      .section.band {
+        border-top: 2px solid var(--band, var(--line));
+      }
+      .band-head {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+      }
+      .band-head .section-title {
+        color: var(--band, var(--text-dim));
+        margin: 0;
+      }
+    </style>
   </head>
   <body>
     <main>
@@ -13,22 +27,18 @@
           <h1>Simple EQ</h1>
           <p class="eyebrow">Z AUDIO EFFECT</p>
         </div>
-        <span id="status">Waiting for host</span>
+        <div class="header-right">
+          <span class="header-note">drag node: freq / gain · wheel: Q · dbl-click: on/off</span>
+          <span id="status">Waiting for host</span>
+        </div>
       </header>
-      <section class="graph-panel" aria-label="EQ response">
-        <svg viewBox="0 0 900 304" preserveAspectRatio="none" aria-hidden="true">
-          <g id="grid"></g>
-          <path id="low-fill" class="band-fill"></path>
-          <path id="mid-fill" class="band-fill"></path>
-          <path id="high-fill" class="band-fill"></path>
-          <path id="low-line" class="band-line"></path>
-          <path id="mid-line" class="band-line"></path>
-          <path id="high-line" class="band-line"></path>
-          <path id="composite-line"></path>
-          <g id="nodes"></g>
-        </svg>
-      </section>
-      <form id="controls" class="bands" autocomplete="off"></form>
+
+      <div class="viz" style="min-height: 168px">
+        <canvas id="viz" title="Drag node: freq / gain · wheel: Q · double-click: band on/off"></canvas>
+        <span class="viz-caption">Frequency response</span>
+      </div>
+
+      <div class="panels cols-3" id="bands"></div>
     </main>
     <script type="module" src="./main.js"></script>
   </body>

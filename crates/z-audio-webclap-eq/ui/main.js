@@ -1,654 +1,371 @@
+// Z Audio Simple EQ UI — interactive frequency-response editor.
+//
+// Three bands on a log-frequency / dB canvas. Each band is a draggable
+// node: horizontal = frequency, vertical = gain (shelf/bell), mouse wheel
+// = Q, double-click = enable/disable. Editing any band control while the
+// band is off switches it on (same behaviour the old UI documented).
+// The plotted curves are exact RBJ biquad magnitude responses at 48 kHz,
+// matching the DSP.
+
+"use strict";
+
+import { connect, createParams, setupCanvas, markConnected, clamp, fmt } from "./zui.js";
+
 const SAMPLE_RATE = 48000;
-const GRAPH = {
-  width: 900,
-  height: 304,
-  left: 54,
-  right: 18,
-  top: 18,
-  bottom: 34,
-};
-const DB_MIN = -24;
-const DB_MAX = 24;
 const FREQ_MIN = 20;
 const FREQ_MAX = 20000;
-
-const TYPE_LABELS = ["Low Shelf", "Bell", "High Shelf", "High Pass", "Low Pass"];
+const DB_MIN = -24;
+const DB_MAX = 24;
+const TYPES = ["Low Shelf", "Bell", "High Shelf", "High Pass", "Low Pass"];
+const TYPE_SHORT = ["LS", "Bell", "HS", "HP", "LP"];
 
 const BANDS = [
-  {
-    key: "low",
-    title: "Low",
-    color: "#31d1a0",
-    enabled: { id: 40, label: "In", kind: "toggle", default: 0 },
-    freq: {
-      id: 41,
-      label: "Freq",
-      kind: "range",
-      scale: "log",
-      min: 20,
-      max: 2000,
-      step: 0.0001,
-      default: 200,
-    },
-    type: { id: 42, label: "Type", kind: "select", options: TYPE_LABELS, default: 0 },
-    gain: {
-      id: 49,
-      label: "Gain",
-      kind: "range",
-      min: -24,
-      max: 24,
-      step: 0.1,
-      default: 0,
-      unit: "dB",
-    },
-    q: { id: 50, label: "Q", kind: "range", min: 0.1, max: 10, step: 0.01, default: 0.707 },
-  },
-  {
-    key: "mid",
-    title: "Mid",
-    color: "#8b7cf6",
-    enabled: { id: 43, label: "In", kind: "toggle", default: 0 },
-    freq: {
-      id: 44,
-      label: "Freq",
-      kind: "range",
-      scale: "log",
-      min: 80,
-      max: 8000,
-      step: 0.0001,
-      default: 1000,
-    },
-    type: { id: 45, label: "Type", kind: "select", options: TYPE_LABELS, default: 1 },
-    gain: {
-      id: 51,
-      label: "Gain",
-      kind: "range",
-      min: -24,
-      max: 24,
-      step: 0.1,
-      default: 0,
-      unit: "dB",
-    },
-    q: { id: 52, label: "Q", kind: "range", min: 0.1, max: 10, step: 0.01, default: 0.707 },
-  },
-  {
-    key: "high",
-    title: "High",
-    color: "#f5b64c",
-    enabled: { id: 46, label: "In", kind: "toggle", default: 0 },
-    freq: {
-      id: 47,
-      label: "Freq",
-      kind: "range",
-      scale: "log",
-      min: 1000,
-      max: 20000,
-      step: 0.0001,
-      default: 5000,
-    },
-    type: { id: 48, label: "Type", kind: "select", options: TYPE_LABELS, default: 2 },
-    gain: {
-      id: 53,
-      label: "Gain",
-      kind: "range",
-      min: -24,
-      max: 24,
-      step: 0.1,
-      default: 0,
-      unit: "dB",
-    },
-    q: { id: 54, label: "Q", kind: "range", min: 0.1, max: 10, step: 0.01, default: 0.707 },
-  },
+  { key: "low", title: "Low", color: "#4fd1a5", enabled: 40, freq: 41, type: 42, gain: 49, q: 50, freqMin: 20, freqMax: 2000, freqDefault: 200, typeDefault: 0 },
+  { key: "mid", title: "Mid", color: "#8b7cf6", enabled: 43, freq: 44, type: 45, gain: 51, q: 52, freqMin: 80, freqMax: 8000, freqDefault: 1000, typeDefault: 1 },
+  { key: "high", title: "High", color: "#f5b64c", enabled: 46, freq: 47, type: 48, gain: 53, q: 54, freqMin: 1000, freqMax: 20000, freqDefault: 5000, typeDefault: 2 },
 ];
 
-const controls = new Map();
-const bandState = new Map(
-  BANDS.map((band) => [
-    band.key,
-    {
-      enabled: band.enabled.default,
-      freq: band.freq.default,
-      type: band.type.default,
-      gain: band.gain.default,
-      q: band.q.default,
-    },
-  ]),
-);
-const status = document.querySelector("#status");
-const selectedBand = { key: "mid" };
-let graphQueued = false;
+// Build band sections + param defs.
+const defs = [];
+const bandsRoot = document.getElementById("bands");
+for (const band of BANDS) {
+  const section = document.createElement("section");
+  section.className = "section band";
+  section.id = `band-${band.key}`;
+  section.style.setProperty("--band", band.color);
+  const head = document.createElement("div");
+  head.className = "band-head";
+  const title = document.createElement("h2");
+  title.className = "section-title";
+  title.textContent = band.title;
+  head.append(title);
+  section.append(head);
+  bandsRoot.append(section);
 
-function encodeReady() {
-  return new Uint8Array([0x65, 0x72, 0x65, 0x61, 0x64, 0x79]).buffer;
+  const mount = `#band-${band.key}`;
+  defs.push(
+    { id: band.enabled, label: "In", kind: "toggle", default: 0, mount, band },
+    { id: band.type, label: "Type", kind: "select", options: TYPE_SHORT, default: band.typeDefault, mount, band },
+    { id: band.freq, label: "Freq", kind: "slider", min: band.freqMin, max: band.freqMax, default: band.freqDefault, scale: "log", fmt: fmt.hz, mount, band },
+    { id: band.gain, label: "Gain", kind: "slider", min: -24, max: 24, default: 0, step: 0.1, fmt: fmt.db, mount, band },
+    { id: band.q, label: "Q", kind: "slider", min: 0.1, max: 10, default: 0.707, scale: "log", fmt: fmt.plain, mount, band },
+  );
 }
 
-function encodeSet(id, value) {
-  const buf = new ArrayBuffer(20);
-  const view = new DataView(buf);
-  view.setUint8(0, 0xa1);
-  view.setUint8(1, 0x63);
-  view.setUint8(2, 0x73);
-  view.setUint8(3, 0x65);
-  view.setUint8(4, 0x74);
-  view.setUint8(5, 0x82);
-  view.setUint8(6, 0x1a);
-  view.setUint32(7, id, false);
-  view.setUint8(11, 0xfb);
-  view.setFloat64(12, value, false);
-  return buf;
-}
-
-function decodeParamsSnapshot(ab) {
-  const view = new DataView(ab);
-  let p = 0;
-  if (view.byteLength < 9 || view.getUint8(p++) !== 0xa1 || view.getUint8(p++) !== 0x66) {
-    return null;
-  }
-  if (String.fromCharCode(...new Uint8Array(ab, p, 6)) !== "params") return null;
-  p += 6;
-
-  const head = view.getUint8(p++);
-  if ((head & 0xe0) !== 0xa0) return null;
-  let count = head & 0x1f;
-  if (count === 24) count = view.getUint8(p++);
-  if (count > 255) return null;
-
-  const out = new Map();
-  for (let i = 0; i < count; i++) {
-    if (p + 13 > view.byteLength || view.getUint8(p++) !== 0x1a) return null;
-    const key = view.getUint32(p, false);
-    p += 4;
-    if (view.getUint8(p++) !== 0xfb) return null;
-    const val = view.getFloat64(p, false);
-    p += 8;
-    out.set(key, val);
-  }
-  return out;
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function clamp01(value) {
-  return clamp(value, 0, 1);
-}
-
-function logNorm(value, min, max) {
-  return clamp01((Math.log10(value) - Math.log10(min)) / (Math.log10(max) - Math.log10(min)));
-}
-
-function fromLogNorm(norm, min, max) {
-  const logMin = Math.log10(min);
-  const logMax = Math.log10(max);
-  return 10 ** (logMin + clamp01(norm) * (logMax - logMin));
-}
-
-function valueToInput(def, value) {
-  if (def.scale === "log") return logNorm(value, def.min, def.max);
-  return value;
-}
-
-function inputToValue(def, value) {
-  if (def.scale === "log") return fromLogNorm(value, def.min, def.max);
-  return Number(value);
-}
-
-function stateFor(band) {
-  return bandState.get(band.key);
-}
-
-function setBandValue(band, role, value) {
-  const state = stateFor(band);
-  if (!state) return;
-  state[role] = value;
-}
-
-function findBandByParam(id) {
-  for (const band of BANDS) {
-    for (const role of ["enabled", "freq", "type", "gain", "q"]) {
-      if (band[role].id === id) return { band, role, def: band[role] };
-    }
-  }
-  return null;
-}
-
-function formatFreq(value) {
-  if (value >= 1000) {
-    const decimals = value >= 10000 ? 1 : 2;
-    return `${(value / 1000).toFixed(decimals)} kHz`;
-  }
-  return `${Math.round(value)} Hz`;
-}
-
-function formatValue(def, value) {
-  if (def.kind === "toggle") return value >= 0.5 ? "IN" : "OFF";
-  if (def.kind === "select") return def.options[Math.round(value)] ?? def.options[0];
-  if (def.label === "Freq") return formatFreq(value);
-  if (def.label === "Gain") return `${value >= 0 ? "+" : ""}${value.toFixed(1)} dB`;
-  if (def.label === "Q") return value.toFixed(2);
-  return Number(value).toFixed(2);
-}
-
-function isPassFilterType(value) {
-  return clamp(Math.round(value), 0, TYPE_LABELS.length - 1) >= 3;
-}
-
-function sendSet(id, value) {
-  window.parent.postMessage(encodeSet(id, value), "*");
-}
-
-function autoEnableBand(band) {
-  const state = stateFor(band);
-  if (!state || state.enabled >= 0.5) return;
-  state.enabled = 1;
-  const control = controls.get(band.enabled.id);
-  control?.paint(1, { updateState: false });
-  sendSet(band.enabled.id, 1);
-}
-
-function queueGraphUpdate() {
-  if (graphQueued) return;
-  graphQueued = true;
-  requestAnimationFrame(() => {
-    graphQueued = false;
-    paintGraph();
-    paintBandSelection();
-  });
-}
-
-function createControl(band, role) {
-  const def = band[role];
-  const wrap = document.createElement("label");
-  wrap.className = `control control-${def.kind}`;
-  wrap.dataset.role = role;
-
-  const title = document.createElement("span");
-  title.className = "control-label";
-  title.textContent = def.label;
-
-  const readout = document.createElement("span");
-  readout.className = "readout";
-
-  let input;
-  if (def.kind === "toggle") {
-    input = document.createElement("input");
-    input.type = "checkbox";
-    input.checked = def.default >= 0.5;
-    const switchBody = document.createElement("span");
-    switchBody.className = "switch-body";
-    switchBody.append(input, document.createElement("span"));
-    wrap.append(title, switchBody, readout);
-  } else if (def.kind === "select") {
-    input = document.createElement("select");
-    input.autocomplete = "off";
-    def.options.forEach((name, index) => {
-      const option = document.createElement("option");
-      option.value = index;
-      option.textContent = name;
-      input.append(option);
-    });
-    wrap.append(title, input, readout);
-  } else {
-    input = document.createElement("input");
-    input.type = "range";
-    input.autocomplete = "off";
-    if (def.scale === "log") {
-      input.min = 0;
-      input.max = 1;
-      input.step = def.step;
-    } else {
-      input.min = def.min;
-      input.max = def.max;
-      input.step = def.step;
-    }
-    const rail = document.createElement("span");
-    rail.className = "slider-rail";
-    rail.append(input);
-    wrap.append(title, rail, readout);
-  }
-
-  function read() {
-    if (def.kind === "toggle") return input.checked ? 1 : 0;
-    if (def.kind === "select") return Number(input.value);
-    return inputToValue(def, Number(input.value));
-  }
-
-  function paint(next, options = {}) {
-    const value = def.kind === "select" ? Math.round(next) : Number(next);
-    if (def.kind === "toggle") {
-      input.checked = value >= 0.5;
-    } else if (def.kind === "range") {
-      const inputValue = valueToInput(def, value);
-      input.value = String(inputValue);
-      const norm =
-        def.scale === "log" ? inputValue : (value - def.min) / (def.max - def.min);
-      input.style.setProperty("--value", `${clamp01(norm) * 100}%`);
-    } else {
-      input.value = String(value);
-    }
-
-    readout.textContent = formatValue(def, value);
-    if (options.updateState !== false) setBandValue(band, role, value);
-    queueGraphUpdate();
-  }
-
-  function setDisabled(disabled) {
-    input.disabled = disabled;
-    wrap.classList.toggle("is-disabled", disabled);
-  }
-
-  const eventName = def.kind === "range" ? "input" : "change";
-  input.addEventListener(eventName, () => {
-    selectedBand.key = band.key;
-    const next = read();
-    if (role !== "enabled") autoEnableBand(band);
-    paint(next);
-    sendSet(def.id, next);
-  });
-
-  paint(def.default);
-  controls.set(def.id, { def, band, role, paint, setDisabled });
-  return wrap;
-}
-
-function buildBandControls() {
-  const root = document.querySelector("#controls");
-  for (const band of BANDS) {
-    const section = document.createElement("section");
-    section.className = `band-card band-${band.key}`;
-    section.dataset.band = band.key;
-    section.style.setProperty("--band-color", band.color);
-
-    const header = document.createElement("button");
-    header.className = "band-header";
-    header.type = "button";
-    header.innerHTML = `<span>${band.title}</span><small></small>`;
-    header.addEventListener("click", () => {
-      selectedBand.key = band.key;
-      paintBandSelection();
-    });
-
-    const fields = document.createElement("div");
-    fields.className = "band-fields";
-    fields.append(
-      createControl(band, "enabled"),
-      createControl(band, "type"),
-      createControl(band, "freq"),
-      createControl(band, "gain"),
-      createControl(band, "q"),
-    );
-
-    section.append(header, fields);
-    root.append(section);
-  }
-}
-
-function xForFreq(freq) {
-  const span = GRAPH.width - GRAPH.left - GRAPH.right;
-  return GRAPH.left + logNorm(freq, FREQ_MIN, FREQ_MAX) * span;
-}
-
-function yForDb(db) {
-  const span = GRAPH.height - GRAPH.top - GRAPH.bottom;
-  return GRAPH.top + ((DB_MAX - clamp(db, DB_MIN, DB_MAX)) / (DB_MAX - DB_MIN)) * span;
-}
-
-function graphPath(points) {
-  return points
-    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-    .join(" ");
-}
-
-function bandFillPath(points) {
-  const zero = yForDb(0);
-  if (!points.length) return "";
-  const last = points[points.length - 1];
-  const first = points[0];
-  return `${graphPath(points)} L${last.x.toFixed(1)} ${zero.toFixed(1)} L${first.x.toFixed(
-    1,
-  )} ${zero.toFixed(1)} Z`;
-}
-
-function biquadCoefficients(type, freq, q, gainDb) {
-  const a = 10 ** (gainDb / 40);
-  const sqrtA = Math.sqrt(a);
-  const w0 = (2 * Math.PI * freq) / SAMPLE_RATE;
-  const cos = Math.cos(w0);
-  const alpha = Math.sin(w0) / (2 * q);
-  const twoSqrtAAlpha = 2 * sqrtA * alpha;
-  let b0;
-  let b1;
-  let b2;
-  let a0;
-  let a1;
-  let a2;
-
-  if (type === 0) {
-    b0 = a * (a + 1 - (a - 1) * cos + twoSqrtAAlpha);
-    b1 = 2 * a * (a - 1 - (a + 1) * cos);
-    b2 = a * (a + 1 - (a - 1) * cos - twoSqrtAAlpha);
-    a0 = a + 1 + (a - 1) * cos + twoSqrtAAlpha;
-    a1 = -2 * (a - 1 + (a + 1) * cos);
-    a2 = a + 1 + (a - 1) * cos - twoSqrtAAlpha;
-  } else if (type === 1) {
-    b0 = 1 + alpha * a;
-    b1 = -2 * cos;
-    b2 = 1 - alpha * a;
-    a0 = 1 + alpha / a;
-    a1 = -2 * cos;
-    a2 = 1 - alpha / a;
-  } else if (type === 2) {
-    b0 = a * (a + 1 + (a - 1) * cos + twoSqrtAAlpha);
-    b1 = -2 * a * (a - 1 + (a + 1) * cos);
-    b2 = a * (a + 1 + (a - 1) * cos - twoSqrtAAlpha);
-    a0 = a + 1 - (a - 1) * cos + twoSqrtAAlpha;
-    a1 = 2 * (a - 1 - (a + 1) * cos);
-    a2 = a + 1 - (a - 1) * cos - twoSqrtAAlpha;
-  } else if (type === 3) {
-    b0 = (1 + cos) / 2;
-    b1 = -(1 + cos);
-    b2 = (1 + cos) / 2;
-    a0 = 1 + alpha;
-    a1 = -2 * cos;
-    a2 = 1 - alpha;
-  } else {
-    b0 = (1 - cos) / 2;
-    b1 = 1 - cos;
-    b2 = (1 - cos) / 2;
-    a0 = 1 + alpha;
-    a1 = -2 * cos;
-    a2 = 1 - alpha;
-  }
-
-  return {
-    b0: b0 / a0,
-    b1: b1 / a0,
-    b2: b2 / a0,
-    a1: a1 / a0,
-    a2: a2 / a0,
-  };
-}
-
-function responseDbForState(state, freq) {
-  if (!state || state.enabled < 0.5) return 0;
-  const f0 = clamp(state.freq, FREQ_MIN, SAMPLE_RATE * 0.45);
-  const q = clamp(state.q, 0.1, 10);
-  const type = clamp(Math.round(state.type), 0, TYPE_LABELS.length - 1);
-  const coeffs = biquadCoefficients(type, f0, q, clamp(state.gain, DB_MIN, DB_MAX));
-  const w = (2 * Math.PI * freq) / SAMPLE_RATE;
-  const c1 = Math.cos(-w);
-  const s1 = Math.sin(-w);
-  const c2 = Math.cos(-2 * w);
-  const s2 = Math.sin(-2 * w);
-  const nr = coeffs.b0 + coeffs.b1 * c1 + coeffs.b2 * c2;
-  const ni = coeffs.b1 * s1 + coeffs.b2 * s2;
-  const dr = 1 + coeffs.a1 * c1 + coeffs.a2 * c2;
-  const di = coeffs.a1 * s1 + coeffs.a2 * s2;
-  const numerator = Math.sqrt(nr * nr + ni * ni);
-  const denominator = Math.max(1e-9, Math.sqrt(dr * dr + di * di));
-  return 20 * Math.log10(Math.max(1e-9, numerator / denominator));
-}
-
-function drawGrid() {
-  const grid = document.querySelector("#grid");
-  if (!grid || grid.childElementCount) return;
-
-  for (const db of [-24, -12, 0, 12, 24]) {
-    const y = yForDb(db);
-    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    line.setAttribute("x1", GRAPH.left);
-    line.setAttribute("x2", GRAPH.width - GRAPH.right);
-    line.setAttribute("y1", y);
-    line.setAttribute("y2", y);
-    line.classList.add(db === 0 ? "zero-line" : "grid-line");
-    grid.append(line);
-
-    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    label.setAttribute("x", 12);
-    label.setAttribute("y", y + 4);
-    label.textContent = db > 0 ? `+${db}` : String(db);
-    label.classList.add("axis-label");
-    grid.append(label);
-  }
-
-  for (const freq of [20, 200, 2000, 20000]) {
-    const x = xForFreq(freq);
-    const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
-    line.setAttribute("x1", x);
-    line.setAttribute("x2", x);
-    line.setAttribute("y1", GRAPH.top);
-    line.setAttribute("y2", GRAPH.height - GRAPH.bottom);
-    line.classList.add("grid-line");
-    grid.append(line);
-
-    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    label.setAttribute("x", x);
-    label.setAttribute("y", GRAPH.height - 10);
-    label.textContent = formatFreq(freq).replace(".00 ", " ");
-    label.classList.add("axis-label", "freq-label");
-    grid.append(label);
-  }
-}
-
-function drawNodes() {
-  const root = document.querySelector("#nodes");
-  if (!root || root.childElementCount) return;
-  for (const band of BANDS) {
-    const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
-    group.classList.add("eq-node", `node-${band.key}`);
-    group.dataset.band = band.key;
-
-    const halo = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    halo.setAttribute("r", 14);
-    halo.classList.add("node-halo");
-
-    const dot = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-    dot.setAttribute("r", 8);
-    dot.classList.add("node-dot");
-
-    const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
-    label.setAttribute("y", 4);
-    label.textContent = band.title[0];
-    label.classList.add("node-label");
-
-    group.append(halo, dot, label);
-    group.addEventListener("click", () => {
-      selectedBand.key = band.key;
-      paintBandSelection();
-    });
-    root.append(group);
-  }
-}
-
-function responsePointsForBand(band) {
-  const state = stateFor(band);
-  const points = [];
-  for (let i = 0; i <= 168; i++) {
-    const norm = i / 168;
-    const freq = fromLogNorm(norm, FREQ_MIN, FREQ_MAX);
-    points.push({ x: xForFreq(freq), y: yForDb(responseDbForState(state, freq)) });
-  }
-  return points;
-}
-
-function compositePoints() {
-  const points = [];
-  for (let i = 0; i <= 220; i++) {
-    const norm = i / 220;
-    const freq = fromLogNorm(norm, FREQ_MIN, FREQ_MAX);
-    const db = BANDS.reduce((sum, band) => sum + responseDbForState(stateFor(band), freq), 0);
-    points.push({ x: xForFreq(freq), y: yForDb(db) });
-  }
-  return points;
-}
-
-function paintGraph() {
-  drawGrid();
-  drawNodes();
-
-  for (const band of BANDS) {
-    const points = responsePointsForBand(band);
-    const state = stateFor(band);
-    const fill = document.querySelector(`#${band.key}-fill`);
-    const line = document.querySelector(`#${band.key}-line`);
-    fill?.setAttribute("d", bandFillPath(points));
-    line?.setAttribute("d", graphPath(points));
-    fill?.classList.toggle("is-off", state.enabled < 0.5);
-    line?.classList.toggle("is-off", state.enabled < 0.5);
-    document.querySelector(`.band-${band.key}`)?.classList.toggle("is-off", state.enabled < 0.5);
-  }
-
-  document.querySelector("#composite-line")?.setAttribute("d", graphPath(compositePoints()));
-
-  for (const band of BANDS) {
-    const state = stateFor(band);
-    const node = document.querySelector(`.node-${band.key}`);
-    if (!node || !state) continue;
-    const x = xForFreq(state.freq);
-    const y = yForDb(state.enabled >= 0.5 ? responseDbForState(state, state.freq) : 0);
-    node.setAttribute("transform", `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
-    node.classList.toggle("is-off", state.enabled < 0.5);
-    controls.get(band.gain.id)?.setDisabled(isPassFilterType(state.type));
-  }
-}
-
-function paintBandSelection() {
-  for (const band of BANDS) {
-    const selected = band.key === selectedBand.key;
-    document.querySelector(`.band-${band.key}`)?.classList.toggle("is-selected", selected);
-    document.querySelector(`.node-${band.key}`)?.classList.toggle("is-selected", selected);
-    const card = document.querySelector(`.band-${band.key}`);
-    const state = stateFor(band);
-    const summary = card?.querySelector(".band-header small");
-    if (summary && state) {
-      if (isPassFilterType(state.type)) {
-        summary.textContent = `${formatFreq(state.freq)} ${formatValue(band.type, state.type)}`;
-      } else {
-        summary.textContent = `${formatFreq(state.freq)} ${
-          state.gain >= 0 ? "+" : ""
-        }${state.gain.toFixed(1)} dB`;
-      }
-    }
-  }
-}
-
-function applySnapshot(snapshot) {
-  for (const [id, next] of snapshot) {
-    const control = controls.get(id);
-    if (!control) continue;
-    control.paint(next);
-  }
-  status.textContent = "CONNECTED";
-}
-
-window.addEventListener("message", (event) => {
-  if (!(event.data instanceof ArrayBuffer)) return;
-  const snapshot = decodeParamsSnapshot(event.data);
-  if (snapshot) applySnapshot(snapshot);
+const sendSet = connect({
+  onSnapshot: (snapshot) => {
+    params.applySnapshot(snapshot);
+    markConnected();
+  },
 });
 
-buildBandControls();
-paintGraph();
-paintBandSelection();
-window.parent.postMessage(encodeReady(), "*");
+// Any edit to a disabled band's non-enable controls switches the band on.
+function onEdit(id) {
+  if (id == null) return;
+  const def = defs.find((d) => d.id === id);
+  if (!def || id === def.band.enabled) return;
+  if (params.get(def.band.enabled) < 0.5) {
+    params.set(def.band.enabled, 1);
+    sendSet(def.band.enabled, 1);
+  }
+}
+
+const params = createParams(defs, sendSet, (id) => {
+  onEdit(id);
+  viz.redraw();
+}, "#bands");
+
+// ---------------------------------------------------------------------------
+// RBJ biquad magnitude response (Audio EQ Cookbook), fs = 48 kHz.
+// ---------------------------------------------------------------------------
+
+function coeffs(type, f0, q, gainDb) {
+  const A = Math.pow(10, gainDb / 40);
+  const w0 = (2 * Math.PI * clamp(f0, 10, SAMPLE_RATE / 2 - 1)) / SAMPLE_RATE;
+  const cw = Math.cos(w0);
+  const sw = Math.sin(w0);
+  const alpha = sw / (2 * Math.max(q, 0.01));
+  let b0, b1, b2, a0, a1, a2;
+  switch (type) {
+    case 0: {
+      // low shelf
+      const s = 2 * Math.sqrt(A) * alpha;
+      b0 = A * (A + 1 - (A - 1) * cw + s);
+      b1 = 2 * A * (A - 1 - (A + 1) * cw);
+      b2 = A * (A + 1 - (A - 1) * cw - s);
+      a0 = A + 1 + (A - 1) * cw + s;
+      a1 = -2 * (A - 1 + (A + 1) * cw);
+      a2 = A + 1 + (A - 1) * cw - s;
+      break;
+    }
+    case 2: {
+      // high shelf
+      const s = 2 * Math.sqrt(A) * alpha;
+      b0 = A * (A + 1 + (A - 1) * cw + s);
+      b1 = -2 * A * (A - 1 + (A + 1) * cw);
+      b2 = A * (A + 1 + (A - 1) * cw - s);
+      a0 = A + 1 - (A - 1) * cw + s;
+      a1 = 2 * (A - 1 - (A + 1) * cw);
+      a2 = A + 1 - (A - 1) * cw - s;
+      break;
+    }
+    case 3: {
+      // high pass
+      b0 = (1 + cw) / 2;
+      b1 = -(1 + cw);
+      b2 = (1 + cw) / 2;
+      a0 = 1 + alpha;
+      a1 = -2 * cw;
+      a2 = 1 - alpha;
+      break;
+    }
+    case 4: {
+      // low pass
+      b0 = (1 - cw) / 2;
+      b1 = 1 - cw;
+      b2 = (1 - cw) / 2;
+      a0 = 1 + alpha;
+      a1 = -2 * cw;
+      a2 = 1 - alpha;
+      break;
+    }
+    default: {
+      // bell
+      b0 = 1 + alpha * A;
+      b1 = -2 * cw;
+      b2 = 1 - alpha * A;
+      a0 = 1 + alpha / A;
+      a1 = -2 * cw;
+      a2 = 1 - alpha / A;
+    }
+  }
+  return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 };
+}
+
+function magDb(c, f) {
+  const w = (2 * Math.PI * f) / SAMPLE_RATE;
+  const cw = Math.cos(w);
+  const sw = Math.sin(w);
+  const c2 = Math.cos(2 * w);
+  const s2 = Math.sin(2 * w);
+  const nr = c.b0 + c.b1 * cw + c.b2 * c2;
+  const ni = -(c.b1 * sw + c.b2 * s2);
+  const dr = 1 + c.a1 * cw + c.a2 * c2;
+  const di = -(c.a1 * sw + c.a2 * s2);
+  const mag = Math.sqrt((nr * nr + ni * ni) / Math.max(dr * dr + di * di, 1e-12));
+  return 20 * Math.log10(Math.max(mag, 1e-6));
+}
+
+function bandResponse(band, f) {
+  return magDb(
+    coeffs(Math.round(params.get(band.type)), params.get(band.freq), params.get(band.q), params.get(band.gain)),
+    f,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Canvas.
+// ---------------------------------------------------------------------------
+
+const canvas = document.getElementById("viz");
+
+function xOfFreq(f, w) {
+  return ((Math.log10(f) - Math.log10(FREQ_MIN)) / (Math.log10(FREQ_MAX) - Math.log10(FREQ_MIN))) * w;
+}
+
+function freqOfX(x, w) {
+  return Math.pow(10, Math.log10(FREQ_MIN) + (x / w) * (Math.log10(FREQ_MAX) - Math.log10(FREQ_MIN)));
+}
+
+function yOfDb(db, h) {
+  return h - ((db - DB_MIN) / (DB_MAX - DB_MIN)) * h;
+}
+
+function dbOfY(y, h) {
+  return DB_MIN + ((h - y) / h) * (DB_MAX - DB_MIN);
+}
+
+const viz = setupCanvas(canvas, () => {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.clearRect(0, 0, w, h);
+  ctx.font = `${9 * dpr}px sans-serif`;
+
+  // Grid: decades + dB lines.
+  ctx.strokeStyle = "rgba(126, 147, 163, 0.10)";
+  ctx.fillStyle = "rgba(126, 147, 163, 0.55)";
+  for (const f of [30, 50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
+    const x = xOfFreq(f, w);
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, h);
+    ctx.stroke();
+    ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}`, x + 2 * dpr, h - 4 * dpr);
+  }
+  for (let db = -18; db <= 18; db += 6) {
+    const y = yOfDb(db, h);
+    ctx.strokeStyle = db === 0 ? "rgba(126, 147, 163, 0.3)" : "rgba(126, 147, 163, 0.10)";
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+    ctx.fillText(`${db > 0 ? "+" : ""}${db}`, 4 * dpr, y - 2 * dpr);
+  }
+
+  // Per-band faint curves + summed bold curve.
+  const active = BANDS.filter((b) => params.get(b.enabled) >= 0.5);
+  for (const band of BANDS) {
+    if (params.get(band.enabled) < 0.5) continue;
+    ctx.beginPath();
+    for (let px = 0; px <= w; px += 2) {
+      const f = freqOfX(px, w);
+      const y = yOfDb(clamp(bandResponse(band, f), DB_MIN, DB_MAX), h);
+      if (px === 0) ctx.moveTo(px, y);
+      else ctx.lineTo(px, y);
+    }
+    ctx.strokeStyle = band.color;
+    ctx.globalAlpha = 0.35;
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+
+  // Sum.
+  ctx.beginPath();
+  for (let px = 0; px <= w; px += 1) {
+    const f = freqOfX(px, w);
+    let db = 0;
+    for (const band of active) db += bandResponse(band, f);
+    const y = yOfDb(clamp(db, DB_MIN, DB_MAX), h);
+    if (px === 0) ctx.moveTo(px, y);
+    else ctx.lineTo(px, y);
+  }
+  ctx.strokeStyle = "#eef2f0";
+  ctx.lineWidth = 2 * dpr;
+  ctx.shadowColor = "rgba(238, 242, 240, 0.4)";
+  ctx.shadowBlur = 4 * dpr;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 1;
+
+  // Fill under sum.
+  ctx.beginPath();
+  ctx.moveTo(0, yOfDb(0, h));
+  for (let px = 0; px <= w; px += 2) {
+    const f = freqOfX(px, w);
+    let db = 0;
+    for (const band of active) db += bandResponse(band, f);
+    ctx.lineTo(px, yOfDb(clamp(db, DB_MIN, DB_MAX), h));
+  }
+  ctx.lineTo(w, yOfDb(0, h));
+  ctx.closePath();
+  ctx.fillStyle = "rgba(79, 209, 165, 0.08)";
+  ctx.fill();
+
+  // Band handles (also for disabled bands, dimmed).
+  for (const band of BANDS) {
+    const enabled = params.get(band.enabled) >= 0.5;
+    const type = Math.round(params.get(band.type));
+    const gain = type === 3 || type === 4 ? 0 : params.get(band.gain);
+    const x = xOfFreq(params.get(band.freq), w);
+    const y = yOfDb(clamp(gain, DB_MIN, DB_MAX), h);
+    ctx.beginPath();
+    ctx.arc(x, y, 6 * dpr, 0, Math.PI * 2);
+    ctx.fillStyle = enabled ? band.color : "rgba(126, 147, 163, 0.35)";
+    ctx.fill();
+    ctx.strokeStyle = "#0a0f15";
+    ctx.stroke();
+    ctx.fillStyle = enabled ? "#0a0f15" : "#38444f";
+    ctx.font = `bold ${8 * dpr}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.fillText(band.title[0], x, y + 3 * dpr);
+    ctx.textAlign = "left";
+    ctx.font = `${9 * dpr}px sans-serif`;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Handle interactions.
+// ---------------------------------------------------------------------------
+
+let drag = null; // { band }
+
+function handleAt(e) {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const x = (e.clientX - rect.left) * dpr;
+  const y = (e.clientY - rect.top) * dpr;
+  let best = null;
+  let bestDist = 14 * dpr;
+  for (const band of BANDS) {
+    const type = Math.round(params.get(band.type));
+    const gain = type === 3 || type === 4 ? 0 : params.get(band.gain);
+    const hx = xOfFreq(params.get(band.freq), canvas.width);
+    const hy = yOfDb(clamp(gain, DB_MIN, DB_MAX), canvas.height);
+    const d = Math.hypot(hx - x, hy - y);
+    if (d < bestDist) {
+      bestDist = d;
+      best = band;
+    }
+  }
+  return best;
+}
+
+canvas.addEventListener("pointerdown", (e) => {
+  const band = handleAt(e);
+  if (!band) return;
+  drag = { band };
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  if (!drag) {
+    canvas.style.cursor = handleAt(e) ? "grab" : "default";
+    return;
+  }
+  const band = drag.band;
+  const x = (e.clientX - rect.left) * dpr;
+  const y = (e.clientY - rect.top) * dpr;
+  const freq = clamp(freqOfX(x, canvas.width), band.freqMin, band.freqMax);
+  params.set(band.freq, freq);
+  sendSet(band.freq, freq);
+  const type = Math.round(params.get(band.type));
+  if (type !== 3 && type !== 4) {
+    const gain = clamp(dbOfY(y, canvas.height), -24, 24);
+    params.set(band.gain, gain);
+    sendSet(band.gain, gain);
+  }
+  onEdit(band.freq);
+  viz.redraw();
+});
+
+canvas.addEventListener("pointerup", () => {
+  drag = null;
+});
+
+canvas.addEventListener("dblclick", (e) => {
+  const band = handleAt(e);
+  if (!band) return;
+  const next = params.get(band.enabled) >= 0.5 ? 0 : 1;
+  params.set(band.enabled, next);
+  sendSet(band.enabled, next);
+  viz.redraw();
+});
+
+canvas.addEventListener(
+  "wheel",
+  (e) => {
+    const band = handleAt(e) || (drag && drag.band);
+    if (!band) return;
+    e.preventDefault();
+    const q = clamp(params.get(band.q) * (e.deltaY < 0 ? 1.12 : 1 / 1.12), 0.1, 10);
+    params.set(band.q, q);
+    sendSet(band.q, q);
+    onEdit(band.q);
+    viz.redraw();
+  },
+  { passive: false },
+);

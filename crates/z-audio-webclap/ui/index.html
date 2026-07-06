@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="--accent: #58a8f0; --accent-soft: rgba(88, 168, 240, 0.16)">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -7,19 +7,48 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="viewport">
-      <main class="synth-shell" aria-label="Z Audio Simple Synth">
-        <header class="topbar">
-          <div>
-            <h1>Z Audio Simple Synth</h1>
-            <span class="model">WEBCLAP INSTRUMENT</span>
-          </div>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>Simple Synth</h1>
+          <p class="eyebrow">Z AUDIO INSTRUMENT</p>
+        </div>
+        <div class="header-right">
+          <span class="header-note">scopes track the controls below</span>
           <span id="status">Waiting for host</span>
-        </header>
+        </div>
+      </header>
 
-        <form id="controls" class="panel-frame" autocomplete="off"></form>
-      </main>
-    </div>
+      <div class="viz-row cols-3" style="min-height: 108px">
+        <div class="viz">
+          <canvas id="viz-osc"></canvas>
+          <span class="viz-caption">Oscillator</span>
+        </div>
+        <div class="viz">
+          <canvas id="viz-env"></canvas>
+          <span class="viz-caption">Amp envelope</span>
+        </div>
+        <div class="viz">
+          <canvas id="viz-lfo"></canvas>
+          <span class="viz-caption">LFO</span>
+        </div>
+      </div>
+
+      <div class="panels cols-4">
+        <section class="section" id="sec-osc">
+          <h2 class="section-title">Oscillator</h2>
+        </section>
+        <section class="section" id="sec-env">
+          <h2 class="section-title">Amp Envelope</h2>
+        </section>
+        <section class="section" id="sec-lfo">
+          <h2 class="section-title">LFO</h2>
+        </section>
+        <section class="section" id="sec-out">
+          <h2 class="section-title">Output</h2>
+        </section>
+      </div>
+    </main>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="--accent: #9d7bf0; --accent-soft: rgba(157, 123, 240, 0.16)">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -10,20 +10,31 @@
     <main>
       <header class="plugin-header">
         <div class="title-row">
-          <h1>Parametric Reverb</h1>
-          <p class="eyebrow">Z AUDIO SPACE</p>
+          <h1>Reverb</h1>
+          <p class="eyebrow">Z AUDIO EFFECT</p>
         </div>
-        <span id="status">Waiting for host</span>
+        <div class="header-right">
+          <span class="header-note">drag decay tail: length / damping</span>
+          <span id="status">Waiting for host</span>
+        </div>
       </header>
-      <section class="graph-panel" aria-label="Reverb room and tail">
-        <svg viewBox="0 0 820 286" preserveAspectRatio="none" aria-hidden="true">
-          <g id="room-lines"></g>
-          <path id="tail-line"></path>
-          <line id="early-marker" />
-          <path id="filter-band"></path>
-        </svg>
-      </section>
-      <form id="controls" class="controls" autocomplete="off"></form>
+
+      <div class="viz" style="min-height: 126px">
+        <canvas id="viz" title="Drag: decay (←→) / damping (↑↓)"></canvas>
+        <span class="viz-caption">Impulse response</span>
+      </div>
+
+      <div class="panels cols-3">
+        <section class="section" id="sec-space">
+          <h2 class="section-title">Space</h2>
+        </section>
+        <section class="section" id="sec-texture">
+          <h2 class="section-title">Texture</h2>
+        </section>
+        <section class="section" id="sec-tone">
+          <h2 class="section-title">Tone</h2>
+        </section>
+      </div>
     </main>
     <script type="module" src="./main.js"></script>
   </body>

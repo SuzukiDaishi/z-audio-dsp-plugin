@@ -177,8 +177,8 @@ The built-in source can generate sine, triangle, white noise, pink noise, or
 brown noise, or play a browser-decodable audio file through the chain. Web MIDI
 input is available from the source panel when the browser and device allow it.
 
-The synth, EQ, reverb, limiter, and compressor tarballs contain these paths at
-archive root:
+The plugins with a custom UI (synth, EQ, reverb, diffuser, limiter,
+compressor, VCSL piano, sampler) ship these paths at archive root:
 
 ```text
 module.wasm
@@ -186,7 +186,29 @@ plugin.json
 ui/index.html
 ui/main.js
 ui/styles.css
+ui/zui.js        (shared Z Audio UI kit: transport + controls + canvas)
 ```
+
+All UIs share one design system (`ui/zui.js` + `ui/styles.css`, copied
+into each bundle with a per-plugin accent color) and put an interactive,
+plugin-specific visualization front and center:
+
+- **Simple Synth** — live scopes for the oscillator shape, amp envelope,
+  and LFO that track the controls.
+- **Simple EQ** — a log-frequency response editor with draggable band
+  nodes (drag = freq/gain, wheel = Q, double-click = band on/off); the
+  plotted curves are exact RBJ biquad responses.
+- **Compressor** — a soft-knee transfer curve you can drag (threshold /
+  ratio) and wheel (knee), with gain-reduction shading.
+- **Limiter** — a brickwall transfer curve with draggable threshold and
+  ceiling.
+- **Parametric Reverb** — a stylized impulse response showing pre-delay,
+  early reflections, decay tail, damping, and width; drag the tail to
+  edit decay/damping.
+- **Diffuser** — an echo-density cloud (one dot per emerging echo);
+  drag to reshape size/diffusion.
+- **VCSL Piano** — a draggable velocity→loudness response curve.
+- **Sampler** — see the sampler section above.
 
 The piano and drum WebCLAP bundles currently expose host parameters without a
 custom WebCLAP UI, so their tarballs contain `module.wasm` and `plugin.json`.

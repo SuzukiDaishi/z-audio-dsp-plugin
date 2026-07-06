@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="--accent: #f0a848; --accent-soft: rgba(240, 168, 72, 0.16)">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -11,20 +11,30 @@
       <header class="plugin-header">
         <div class="title-row">
           <h1>Compressor</h1>
-          <p class="eyebrow">Z AUDIO DYNAMICS</p>
+          <p class="eyebrow">Z AUDIO EFFECT</p>
         </div>
-        <span id="status">Waiting for host</span>
+        <div class="header-right">
+          <span class="header-note">drag curve: threshold / ratio · wheel: knee</span>
+          <span id="status">Waiting for host</span>
+        </div>
       </header>
-      <section class="graph-panel" aria-label="Transfer curve">
-        <svg viewBox="0 0 760 260" preserveAspectRatio="none" aria-hidden="true">
-          <g id="grid"></g>
-          <path id="unity-line"></path>
-          <path id="curve-line"></path>
-          <path id="knee-fill"></path>
-          <line id="threshold-line" />
-        </svg>
-      </section>
-      <form id="controls" class="controls" autocomplete="off"></form>
+
+      <div class="viz" style="min-height: 128px">
+        <canvas id="viz" title="Drag: threshold (←→) / ratio (↑↓) · wheel: knee"></canvas>
+        <span class="viz-caption">Transfer curve</span>
+      </div>
+
+      <div class="panels cols-3">
+        <section class="section" id="sec-comp">
+          <h2 class="section-title">Compression</h2>
+        </section>
+        <section class="section" id="sec-time">
+          <h2 class="section-title">Timing</h2>
+        </section>
+        <section class="section" id="sec-level">
+          <h2 class="section-title">Level</h2>
+        </section>
+      </div>
     </main>
     <script type="module" src="./main.js"></script>
   </body>
