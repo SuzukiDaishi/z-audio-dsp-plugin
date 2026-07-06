@@ -1,302 +1,221 @@
-const GRAPH = {
-  width: 820,
-  height: 286,
-  left: 34,
-  right: 34,
-  top: 24,
-  bottom: 28,
+// Z Audio Parametric Reverb UI — stylized impulse-response display.
+//
+// The viz draws what the parameters *mean*: a pre-delay gap, sparse early
+// reflections (spacing set by Room, density by Diffusion), and a late
+// tail whose length follows Decay, brightness decay follows Damping, and
+// stereo spread follows Width. Dragging the tail edits Decay (horizontal)
+// and Damping (vertical).
+
+"use strict";
+
+import { connect, createParams, setupCanvas, markConnected, clamp, fmt } from "./zui.js";
+
+const P = {
+  mix: 100,
+  room: 101,
+  decay: 102,
+  preDelay: 103,
+  diffusion: 104,
+  damping: 105,
+  lowCut: 106,
+  highCut: 107,
+  modRate: 108,
+  modDepth: 109,
+  width: 110,
+  earlyLate: 111,
+  output: 112,
 };
 
-const GROUPS = [
-  {
-    title: "Space",
-    params: [
-      { id: 100, key: "mix", label: "Mix", min: 0, max: 1, default: 0.35, step: 0.01, unit: "%" },
-      { id: 101, key: "room", label: "Room", min: 0, max: 1, default: 0.55, step: 0.01, unit: "%" },
-      { id: 102, key: "decay", label: "Decay", min: 0.1, max: 20, default: 2.2, step: 0.0001, scale: "log", unit: "s" },
-      { id: 103, key: "preDelay", label: "Pre Delay", min: 0, max: 250, default: 18, step: 0.1, unit: "ms" },
-      { id: 111, key: "earlyLate", label: "Early/Late", min: 0, max: 1, default: 0.35, step: 0.01, unit: "%" },
-    ],
-  },
-  {
-    title: "Texture",
-    params: [
-      { id: 104, key: "diffusion", label: "Diffusion", min: 0, max: 1, default: 0.65, step: 0.01, unit: "%" },
-      { id: 105, key: "damping", label: "Damping", min: 0, max: 1, default: 0.35, step: 0.01, unit: "%" },
-      { id: 110, key: "width", label: "Width", min: 0, max: 1, default: 0.9, step: 0.01, unit: "%" },
-      { id: 108, key: "modRate", label: "Mod Rate", min: 0, max: 2, default: 0, step: 0.01, unit: "Hz" },
-      { id: 109, key: "modDepth", label: "Mod Depth", min: 0, max: 1, default: 0, step: 0.01, unit: "%" },
-    ],
-  },
-  {
-    title: "Tone",
-    params: [
-      { id: 106, key: "lowCut", label: "Low Cut", min: 20, max: 1000, default: 80, step: 0.0001, scale: "log", unit: "Hz" },
-      { id: 107, key: "highCut", label: "High Cut", min: 1000, max: 20000, default: 12000, step: 0.0001, scale: "log", unit: "Hz" },
-      { id: 112, key: "output", label: "Output", min: -24, max: 24, default: 0, step: 0.1, unit: "dB" },
-    ],
-  },
+const PARAMS = [
+  { id: P.mix, label: "Mix", kind: "slider", min: 0, max: 1, default: 0.35, step: 0.01, fmt: fmt.pct, mount: "#sec-space" },
+  { id: P.room, label: "Room", kind: "slider", min: 0, max: 1, default: 0.55, step: 0.01, fmt: fmt.pct, mount: "#sec-space" },
+  { id: P.decay, label: "Decay", kind: "slider", min: 0.1, max: 20, default: 2.2, scale: "log", fmt: fmt.s, mount: "#sec-space" },
+  { id: P.preDelay, label: "Pre Delay", kind: "slider", min: 0, max: 250, default: 18, step: 0.1, fmt: fmt.ms, mount: "#sec-space" },
+  { id: P.earlyLate, label: "Early/Late", kind: "slider", min: 0, max: 1, default: 0.35, step: 0.01, fmt: fmt.pct, mount: "#sec-space" },
+  { id: P.diffusion, label: "Diffusion", kind: "slider", min: 0, max: 1, default: 0.65, step: 0.01, fmt: fmt.pct, mount: "#sec-texture" },
+  { id: P.damping, label: "Damping", kind: "slider", min: 0, max: 1, default: 0.35, step: 0.01, fmt: fmt.pct, mount: "#sec-texture" },
+  { id: P.width, label: "Width", kind: "slider", min: 0, max: 1, default: 0.9, step: 0.01, fmt: fmt.pct, mount: "#sec-texture" },
+  { id: P.modRate, label: "Mod Rate", kind: "slider", min: 0, max: 2, default: 0, step: 0.01, fmt: fmt.hzLfo, mount: "#sec-texture" },
+  { id: P.modDepth, label: "Mod Depth", kind: "slider", min: 0, max: 1, default: 0, step: 0.01, fmt: fmt.pct, mount: "#sec-texture" },
+  { id: P.lowCut, label: "Low Cut", kind: "slider", min: 20, max: 1000, default: 80, scale: "log", fmt: fmt.hz, mount: "#sec-tone" },
+  { id: P.highCut, label: "High Cut", kind: "slider", min: 1000, max: 20000, default: 12000, scale: "log", fmt: fmt.hz, mount: "#sec-tone" },
+  { id: P.output, label: "Output", kind: "slider", min: -24, max: 24, default: 0, step: 0.1, fmt: fmt.db, mount: "#sec-tone" },
 ];
 
-const PARAMS = GROUPS.flatMap((group) => group.params);
-const controls = new Map();
-const state = new Map(PARAMS.map((param) => [param.key, param.default]));
-const status = document.querySelector("#status");
-let graphQueued = false;
-
-function encodeReady() {
-  return new Uint8Array([0x65, 0x72, 0x65, 0x61, 0x64, 0x79]).buffer;
-}
-
-function encodeSet(id, value) {
-  const buf = new ArrayBuffer(20);
-  const view = new DataView(buf);
-  view.setUint8(0, 0xa1);
-  view.setUint8(1, 0x63);
-  view.setUint8(2, 0x73);
-  view.setUint8(3, 0x65);
-  view.setUint8(4, 0x74);
-  view.setUint8(5, 0x82);
-  view.setUint8(6, 0x1a);
-  view.setUint32(7, id, false);
-  view.setUint8(11, 0xfb);
-  view.setFloat64(12, value, false);
-  return buf;
-}
-
-function decodeParamsSnapshot(ab) {
-  const view = new DataView(ab);
-  let p = 0;
-  if (view.byteLength < 9 || view.getUint8(p++) !== 0xa1 || view.getUint8(p++) !== 0x66) return null;
-  if (String.fromCharCode(...new Uint8Array(ab, p, 6)) !== "params") return null;
-  p += 6;
-  const head = view.getUint8(p++);
-  if ((head & 0xe0) !== 0xa0) return null;
-  let count = head & 0x1f;
-  if (count === 24) count = view.getUint8(p++);
-  const out = new Map();
-  for (let i = 0; i < count; i++) {
-    if (p + 13 > view.byteLength || view.getUint8(p++) !== 0x1a) return null;
-    const key = view.getUint32(p, false);
-    p += 4;
-    if (view.getUint8(p++) !== 0xfb) return null;
-    const value = view.getFloat64(p, false);
-    p += 8;
-    out.set(key, value);
-  }
-  return out;
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function clamp01(value) {
-  return clamp(value, 0, 1);
-}
-
-function logNorm(value, min, max) {
-  return clamp01((Math.log10(value) - Math.log10(min)) / (Math.log10(max) - Math.log10(min)));
-}
-
-function fromLogNorm(norm, min, max) {
-  return 10 ** (Math.log10(min) + clamp01(norm) * (Math.log10(max) - Math.log10(min)));
-}
-
-function valueToInput(def, value) {
-  return def.scale === "log" ? logNorm(value, def.min, def.max) : value;
-}
-
-function inputToValue(def, value) {
-  return def.scale === "log" ? fromLogNorm(value, def.min, def.max) : Number(value);
-}
-
-function formatFreq(value) {
-  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 1 : 2)} kHz`;
-  return `${Math.round(value)} Hz`;
-}
-
-function formatValue(def, value) {
-  if (def.unit === "dB") return `${value >= 0 ? "+" : ""}${value.toFixed(1)} dB`;
-  if (def.unit === "ms") return value >= 100 ? `${Math.round(value)} ms` : `${value.toFixed(1)} ms`;
-  if (def.unit === "s") return `${value.toFixed(2)} s`;
-  if (def.unit === "Hz") return formatFreq(value);
-  if (def.unit === "%") return `${Math.round(value * 100)}%`;
-  return value.toFixed(2);
-}
-
-function sendSet(id, value) {
-  window.parent.postMessage(encodeSet(id, value), "*");
-}
-
-function queueGraphUpdate() {
-  if (graphQueued) return;
-  graphQueued = true;
-  requestAnimationFrame(() => {
-    graphQueued = false;
-    paintGraph();
-  });
-}
-
-function setState(def, value) {
-  state.set(def.key, clamp(Number(value), def.min, def.max));
-  queueGraphUpdate();
-}
-
-function createControl(def) {
-  const wrap = document.createElement("label");
-  wrap.className = "control";
-
-  const title = document.createElement("span");
-  title.className = "control-label";
-  title.textContent = def.label;
-
-  const input = document.createElement("input");
-  input.type = "range";
-  input.autocomplete = "off";
-  if (def.scale === "log") {
-    input.min = 0;
-    input.max = 1;
-    input.step = def.step;
-  } else {
-    input.min = def.min;
-    input.max = def.max;
-    input.step = def.step;
-  }
-
-  const rail = document.createElement("span");
-  rail.className = "slider-rail";
-  rail.append(input);
-
-  const readout = document.createElement("span");
-  readout.className = "readout";
-  wrap.append(title, rail, readout);
-
-  function paint(value, options = {}) {
-    const next = Number(value);
-    const inputValue = valueToInput(def, next);
-    input.value = String(inputValue);
-    const norm = def.scale === "log" ? inputValue : (next - def.min) / (def.max - def.min);
-    input.style.setProperty("--value", `${clamp01(norm) * 100}%`);
-    readout.textContent = formatValue(def, next);
-    if (options.updateState !== false) setState(def, next);
-  }
-
-  input.addEventListener("input", () => {
-    const next = inputToValue(def, Number(input.value));
-    paint(next);
-    sendSet(def.id, next);
-  });
-
-  paint(def.default);
-  controls.set(def.id, { def, paint });
-  return wrap;
-}
-
-function buildControls() {
-  const root = document.querySelector("#controls");
-  for (const group of GROUPS) {
-    const section = document.createElement("section");
-    section.className = "control-section";
-    const title = document.createElement("p");
-    title.className = "section-title";
-    title.textContent = group.title;
-    section.append(title, ...group.params.map(createControl));
-    root.append(section);
-  }
-}
-
-function svgEl(name) {
-  return document.createElementNS("http://www.w3.org/2000/svg", name);
-}
-
-function path(points) {
-  return points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
-}
-
-function paintGraph() {
-  const roomGroup = document.querySelector("#room-lines");
-  if (!roomGroup) return;
-  roomGroup.replaceChildren();
-
-  const room = state.get("room");
-  const decay = state.get("decay");
-  const diffusion = state.get("diffusion");
-  const damping = state.get("damping");
-  const earlyLate = state.get("earlyLate");
-  const lowCut = state.get("lowCut");
-  const highCut = state.get("highCut");
-
-  const cx = GRAPH.width * 0.5;
-  const cy = GRAPH.height * 0.48;
-  const width = 190 + room * 440;
-  const height = 70 + room * 135;
-  const left = cx - width / 2;
-  const right = cx + width / 2;
-  const top = cy - height / 2;
-  const bottom = cy + height / 2;
-
-  const wall = svgEl("path");
-  wall.classList.add("room-wall");
-  wall.setAttribute("d", `M${left} ${top} L${right} ${top} L${right} ${bottom} L${left} ${bottom} Z`);
-  roomGroup.append(wall);
-
-  for (let i = 0; i < 10; i++) {
-    const t = i / 9;
-    const spread = 0.18 + t * (0.58 + diffusion * 0.32);
-    const y = top + height * t;
-    const alpha = clamp((1 - t * 0.68) * (0.48 + decay / 18), 0.12, 0.9);
-    const line = svgEl("line");
-    line.classList.add("reflection-line");
-    line.setAttribute("x1", cx - width * spread * 0.5);
-    line.setAttribute("x2", cx + width * spread * 0.5);
-    line.setAttribute("y1", y);
-    line.setAttribute("y2", y);
-    line.setAttribute("stroke-width", 0.9 + diffusion * 2.2);
-    line.setAttribute("stroke-opacity", alpha * (1 - damping * 0.35));
-    roomGroup.append(line);
-  }
-
-  const tail = [];
-  for (let i = 0; i <= 100; i++) {
-    const t = i / 100;
-    const x = GRAPH.left + t * (GRAPH.width - GRAPH.left - GRAPH.right);
-    const curve = Math.exp(-(t * 5.5) / Math.max(0.2, decay));
-    const y = GRAPH.height - GRAPH.bottom - curve * (GRAPH.height - GRAPH.top - GRAPH.bottom - 18);
-    tail.push({ x, y });
-  }
-  document.querySelector("#tail-line")?.setAttribute("d", path(tail));
-
-  const markerX = GRAPH.left + earlyLate * (GRAPH.width - GRAPH.left - GRAPH.right);
-  const marker = document.querySelector("#early-marker");
-  marker?.setAttribute("x1", markerX);
-  marker?.setAttribute("x2", markerX);
-  marker?.setAttribute("y1", GRAPH.top);
-  marker?.setAttribute("y2", GRAPH.height - GRAPH.bottom);
-
-  const lowNorm = logNorm(lowCut, 20, 20000);
-  const highNorm = logNorm(highCut, 20, 20000);
-  const fx1 = GRAPH.left + lowNorm * (GRAPH.width - GRAPH.left - GRAPH.right);
-  const fx2 = GRAPH.left + highNorm * (GRAPH.width - GRAPH.left - GRAPH.right);
-  document.querySelector("#filter-band")?.setAttribute(
-    "d",
-    `M${fx1.toFixed(1)} ${GRAPH.top} L${fx2.toFixed(1)} ${GRAPH.top} L${fx2.toFixed(1)} ${GRAPH.height - GRAPH.bottom} L${fx1.toFixed(1)} ${GRAPH.height - GRAPH.bottom} Z`,
-  );
-}
-
-function applySnapshot(snapshot) {
-  for (const [id, value] of snapshot) {
-    controls.get(id)?.paint(value);
-  }
-  status.textContent = "CONNECTED";
-}
-
-window.addEventListener("message", (event) => {
-  if (!(event.data instanceof ArrayBuffer)) return;
-  const snapshot = decodeParamsSnapshot(event.data);
-  if (snapshot) applySnapshot(snapshot);
+const sendSet = connect({
+  onSnapshot: (snapshot) => {
+    params.applySnapshot(snapshot);
+    markConnected();
+  },
 });
 
-buildControls();
-paintGraph();
-window.parent.postMessage(encodeReady(), "*");
+const params = createParams(PARAMS, sendSet, () => viz.redraw(), ".panels");
+
+// ---------------------------------------------------------------------------
+// Impulse-response drawing. Time axis spans preDelayMax + 20 s (log-ish
+// squash so short rooms still read); amplitude decays exponentially.
+// ---------------------------------------------------------------------------
+
+// Deterministic pseudo-random for reflection placement (stable redraws).
+function mulberry(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const canvas = document.getElementById("viz");
+
+const viz = setupCanvas(canvas, () => {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.clearRect(0, 0, w, h);
+
+  const decay = params.get(P.decay);
+  const preDelay = params.get(P.preDelay) / 1000;
+  const room = params.get(P.room);
+  const diffusion = params.get(P.diffusion);
+  const damping = params.get(P.damping);
+  const width = params.get(P.width);
+  const earlyLate = params.get(P.earlyLate);
+  const mix = params.get(P.mix);
+  const modDepth = params.get(P.modDepth);
+
+  // Time span: squash long decays so the shape always fits.
+  const span = Math.max(0.8, preDelay + decay * 1.15);
+  const xOf = (t) => (t / span) * w;
+  const mid = h / 2;
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+
+  // Center line.
+  ctx.strokeStyle = "rgba(126, 147, 163, 0.2)";
+  ctx.beginPath();
+  ctx.moveTo(0, mid);
+  ctx.lineTo(w, mid);
+  ctx.stroke();
+
+  // Dry impulse at t=0.
+  ctx.strokeStyle = "#cfe7db";
+  ctx.lineWidth = 2 * dpr;
+  ctx.beginPath();
+  ctx.moveTo(2 * dpr, mid - (h / 2) * 0.92 * (1 - mix * 0.5));
+  ctx.lineTo(2 * dpr, mid + (h / 2) * 0.92 * (1 - mix * 0.5));
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  // Pre-delay gap marker.
+  if (preDelay > 0.002) {
+    ctx.strokeStyle = "rgba(157, 123, 240, 0.35)";
+    ctx.setLineDash([3 * dpr, 3 * dpr]);
+    ctx.beginPath();
+    ctx.moveTo(xOf(preDelay), mid - h * 0.42);
+    ctx.lineTo(xOf(preDelay), mid + h * 0.42);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  const wet = 0.25 + 0.75 * mix;
+
+  // Early reflections: count by diffusion, spacing by room size.
+  const rand = mulberry(42);
+  const earlyCount = Math.round(4 + diffusion * 20);
+  const earlySpan = 0.02 + room * 0.09;
+  const earlyGain = wet * (1 - earlyLate * 0.7);
+  ctx.strokeStyle = "rgba(207, 231, 219, 0.75)";
+  for (let i = 0; i < earlyCount; i++) {
+    const t = preDelay + earlySpan * Math.pow((i + 1) / earlyCount, 1.4) * (0.8 + rand() * 0.4);
+    const amp = earlyGain * (1 - i / earlyCount) * (0.5 + rand() * 0.5);
+    const side = (rand() * 2 - 1) * width;
+    const top = amp * (1 + side * 0.4);
+    const bottom = amp * (1 - side * 0.4);
+    ctx.beginPath();
+    ctx.moveTo(xOf(t), mid - (h / 2) * 0.9 * top);
+    ctx.lineTo(xOf(t), mid + (h / 2) * 0.9 * bottom);
+    ctx.stroke();
+  }
+
+  // Late tail: dense strokes under an exp envelope. Damping darkens and
+  // shortens the "bright" inner band; modulation wobbles stroke placement.
+  const tailStart = preDelay + earlySpan * 0.8;
+  const strokes = 160;
+  const lateGain = wet * (0.35 + earlyLate * 0.65);
+  for (let i = 0; i < strokes; i++) {
+    const frac = i / strokes;
+    const t = tailStart + frac * decay * 1.1;
+    const env = Math.exp((-6.91 * (t - tailStart)) / decay); // -60 dB at `decay`
+    if (env < 0.004) break;
+    const jitter = (rand() * 2 - 1) * modDepth * 0.06;
+    const amp = lateGain * env * (0.6 + rand() * 0.4 + jitter);
+    const side = (rand() * 2 - 1) * width;
+    const x = xOf(t);
+    // Full-band stroke.
+    ctx.strokeStyle = `rgba(157, 123, 240, ${0.16 + 0.4 * env})`;
+    ctx.beginPath();
+    ctx.moveTo(x, mid - (h / 2) * 0.9 * amp * (1 + side * 0.35));
+    ctx.lineTo(x, mid + (h / 2) * 0.9 * amp * (1 - side * 0.35));
+    ctx.stroke();
+    // Bright band dies faster with damping.
+    const brightEnv = Math.exp((-6.91 * (t - tailStart)) / (decay * (1 - damping * 0.85)));
+    ctx.strokeStyle = `rgba(220, 205, 255, ${0.25 * brightEnv})`;
+    ctx.beginPath();
+    ctx.moveTo(x, mid - (h / 2) * 0.45 * amp * brightEnv);
+    ctx.lineTo(x, mid + (h / 2) * 0.45 * amp * brightEnv);
+    ctx.stroke();
+  }
+
+  // Decay envelope outline.
+  ctx.beginPath();
+  for (let px = xOf(tailStart); px <= w; px++) {
+    const t = (px / w) * span;
+    const env = Math.exp((-6.91 * (t - tailStart)) / decay);
+    const y = mid - (h / 2) * 0.9 * lateGain * env;
+    if (px === Math.round(xOf(tailStart))) ctx.moveTo(px, y);
+    else ctx.lineTo(px, y);
+  }
+  ctx.strokeStyle = accent;
+  ctx.lineWidth = 1.5 * dpr;
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  // Time labels.
+  ctx.fillStyle = "rgba(126, 147, 163, 0.55)";
+  ctx.font = `${9 * dpr}px sans-serif`;
+  for (const t of [0.5, 1, 2, 5, 10, 15]) {
+    if (t < span * 0.95) ctx.fillText(`${t}s`, xOf(t) + 2 * dpr, h - 4 * dpr);
+  }
+});
+
+// Drag the tail: horizontal = decay, vertical = damping.
+let dragStart = null;
+
+canvas.addEventListener("pointerdown", (e) => {
+  dragStart = {
+    x: e.clientX,
+    y: e.clientY,
+    decay: params.get(P.decay),
+    damping: params.get(P.damping),
+  };
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!dragStart) return;
+  const rect = canvas.getBoundingClientRect();
+  const decay = clamp(dragStart.decay * Math.pow(2, (e.clientX - dragStart.x) / (rect.width / 3)), 0.1, 20);
+  const damping = clamp(dragStart.damping + (e.clientY - dragStart.y) / rect.height, 0, 1);
+  params.set(P.decay, decay);
+  params.set(P.damping, damping);
+  sendSet(P.decay, decay);
+  sendSet(P.damping, damping);
+  viz.redraw();
+});
+
+canvas.addEventListener("pointerup", () => {
+  dragStart = null;
+});

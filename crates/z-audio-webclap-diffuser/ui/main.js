@@ -1,255 +1,154 @@
-const GRAPH = {
-  width: 760,
-  height: 246,
-  left: 34,
-  right: 34,
-  top: 24,
-  bottom: 28,
+// Z Audio Diffuser UI — echo-density scatter.
+//
+// The diffuser is a chain of up to 100 allpasses; what you hear is an
+// impulse smearing into a dense cloud. The viz draws exactly that: one
+// dot per emerging echo — horizontal position is its arrival time (spread
+// by Size, count by AP Count), vertical position is its stereo placement
+// (Width), and dot density/opacity follows Diffusion and Mix. Drag the
+// cloud to reshape it: horizontal = Size, vertical = Diffusion.
+
+"use strict";
+
+import { connect, createParams, setupCanvas, markConnected, clamp, fmt } from "./zui.js";
+
+const P = {
+  mix: 220,
+  diffusion: 221,
+  size: 222,
+  width: 223,
+  output: 224,
+  allpassCount: 225,
 };
 
-const GROUPS = [
-  {
-    title: "Diffuse",
-    params: [
-      { id: 220, key: "mix", label: "Mix", min: 0, max: 1, default: 1, step: 0.01, unit: "%" },
-      { id: 221, key: "diffusion", label: "Diffusion", min: 0, max: 1, default: 0.04, step: 0.01, unit: "%" },
-      { id: 225, key: "allpassCount", label: "AP Count", min: 1, max: 100, default: 100, step: 1, unit: "count" },
-      { id: 222, key: "size", label: "Size", min: 0, max: 1, default: 0.5, step: 0.01, unit: "%" },
-    ],
-  },
-  {
-    title: "Output",
-    params: [
-      { id: 223, key: "width", label: "Width", min: 0, max: 1, default: 1, step: 0.01, unit: "%" },
-      { id: 224, key: "output", label: "Output", min: -24, max: 24, default: 0, step: 0.1, unit: "dB" },
-    ],
-  },
+const PARAMS = [
+  { id: P.mix, label: "Mix", kind: "slider", min: 0, max: 1, default: 1, step: 0.01, fmt: fmt.pct, mount: "#sec-diff" },
+  { id: P.diffusion, label: "Diffusion", kind: "slider", min: 0, max: 1, default: 0.04, step: 0.01, fmt: fmt.pct, mount: "#sec-diff" },
+  { id: P.allpassCount, label: "AP Count", kind: "slider", min: 1, max: 100, default: 100, step: 1, fmt: fmt.int, mount: "#sec-diff" },
+  { id: P.size, label: "Size", kind: "slider", min: 0, max: 1, default: 0.5, step: 0.01, fmt: fmt.pct, mount: "#sec-diff" },
+  { id: P.width, label: "Width", kind: "slider", min: 0, max: 1, default: 1, step: 0.01, fmt: fmt.pct, mount: "#sec-out" },
+  { id: P.output, label: "Output", kind: "slider", min: -24, max: 24, default: 0, step: 0.1, fmt: fmt.db, mount: "#sec-out" },
 ];
 
-const PARAMS = GROUPS.flatMap((group) => group.params);
-const controls = new Map();
-const state = new Map(PARAMS.map((param) => [param.key, param.default]));
-const status = document.querySelector("#status");
-let graphQueued = false;
-
-function encodeReady() {
-  return new Uint8Array([0x65, 0x72, 0x65, 0x61, 0x64, 0x79]).buffer;
-}
-
-function encodeSet(id, value) {
-  const buf = new ArrayBuffer(20);
-  const view = new DataView(buf);
-  view.setUint8(0, 0xa1);
-  view.setUint8(1, 0x63);
-  view.setUint8(2, 0x73);
-  view.setUint8(3, 0x65);
-  view.setUint8(4, 0x74);
-  view.setUint8(5, 0x82);
-  view.setUint8(6, 0x1a);
-  view.setUint32(7, id, false);
-  view.setUint8(11, 0xfb);
-  view.setFloat64(12, value, false);
-  return buf;
-}
-
-function decodeParamsSnapshot(ab) {
-  const view = new DataView(ab);
-  let p = 0;
-  if (view.byteLength < 9 || view.getUint8(p++) !== 0xa1 || view.getUint8(p++) !== 0x66) return null;
-  if (String.fromCharCode(...new Uint8Array(ab, p, 6)) !== "params") return null;
-  p += 6;
-  const head = view.getUint8(p++);
-  if ((head & 0xe0) !== 0xa0) return null;
-  let count = head & 0x1f;
-  if (count === 24) count = view.getUint8(p++);
-  const out = new Map();
-  for (let i = 0; i < count; i++) {
-    if (p + 13 > view.byteLength || view.getUint8(p++) !== 0x1a) return null;
-    const key = view.getUint32(p, false);
-    p += 4;
-    if (view.getUint8(p++) !== 0xfb) return null;
-    const value = view.getFloat64(p, false);
-    p += 8;
-    out.set(key, value);
-  }
-  return out;
-}
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function clamp01(value) {
-  return clamp(value, 0, 1);
-}
-
-function formatValue(def, value) {
-  if (def.unit === "dB") return `${value >= 0 ? "+" : ""}${value.toFixed(1)} dB`;
-  if (def.unit === "%") return `${Math.round(value * 100)}%`;
-  if (def.unit === "count") return `${Math.round(value)}`;
-  return value.toFixed(2);
-}
-
-function sendSet(id, value) {
-  window.parent.postMessage(encodeSet(id, value), "*");
-}
-
-function queueGraphUpdate() {
-  if (graphQueued) return;
-  graphQueued = true;
-  requestAnimationFrame(() => {
-    graphQueued = false;
-    paintGraph();
-  });
-}
-
-function setState(def, value) {
-  state.set(def.key, clamp(Number(value), def.min, def.max));
-  queueGraphUpdate();
-}
-
-function createControl(def) {
-  const wrap = document.createElement("label");
-  wrap.className = "control";
-
-  const title = document.createElement("span");
-  title.className = "control-label";
-  title.textContent = def.label;
-
-  const input = document.createElement("input");
-  input.type = "range";
-  input.autocomplete = "off";
-  input.min = def.min;
-  input.max = def.max;
-  input.step = def.step;
-
-  const rail = document.createElement("span");
-  rail.className = "slider-rail";
-  rail.append(input);
-
-  const readout = document.createElement("span");
-  readout.className = "readout";
-  wrap.append(title, rail, readout);
-
-  function paint(value, options = {}) {
-    const next = Number(value);
-    input.value = String(next);
-    input.style.setProperty("--value", `${clamp01((next - def.min) / (def.max - def.min)) * 100}%`);
-    readout.textContent = formatValue(def, next);
-    if (options.updateState !== false) setState(def, next);
-  }
-
-  input.addEventListener("input", () => {
-    const next = Number(input.value);
-    paint(next);
-    sendSet(def.id, next);
-  });
-
-  paint(def.default);
-  controls.set(def.id, { def, paint });
-  return wrap;
-}
-
-function buildControls() {
-  const root = document.querySelector("#controls");
-  for (const group of GROUPS) {
-    const section = document.createElement("section");
-    section.className = "control-section";
-    const title = document.createElement("p");
-    title.className = "section-title";
-    title.textContent = group.title;
-    section.append(title, ...group.params.map(createControl));
-    root.append(section);
-  }
-}
-
-function svgEl(name) {
-  return document.createElementNS("http://www.w3.org/2000/svg", name);
-}
-
-function path(points) {
-  return points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(" ");
-}
-
-function paintGraph() {
-  const diffusion = state.get("diffusion");
-  const allpassCount = Math.round(state.get("allpassCount"));
-  const effectiveOrder = diffusion * allpassCount;
-  const activeStages = Math.round(effectiveOrder);
-  const wetPresence = Math.min(1, effectiveOrder);
-  const size = state.get("size");
-  const width = state.get("width");
-  const mix = state.get("mix");
-  const stageGroup = document.querySelector("#stage-lines");
-  const markerGroup = document.querySelector("#delay-markers");
-  if (!stageGroup || !markerGroup) return;
-  stageGroup.replaceChildren();
-  markerGroup.replaceChildren();
-
-  const centerY = GRAPH.height * 0.5;
-  const span = GRAPH.width - GRAPH.left - GRAPH.right;
-  const baseDelays = [4.7, 3.6, 12.7, 9.3];
-  const scale = 0.5 + size;
-  const visibleStages = Math.min(activeStages, 24);
-  const svg = document.querySelector(".graph-panel svg");
-  const svgScale = svg ? svg.getBoundingClientRect().width / GRAPH.width : 1;
-  const labelStepPx = visibleStages > 0 ? (span / visibleStages) * svgScale : 0;
-  const showBaseDelayLabels = labelStepPx >= 72;
-
-  for (let i = 0; i < visibleStages; i++) {
-    const x0 = GRAPH.left + span * (i / visibleStages);
-    const x1 = GRAPH.left + span * ((i + 0.72) / visibleStages);
-    const y = centerY + (i % 2 === 0 ? -1 : 1) * (24 + width * 30);
-    const line = svgEl("path");
-    line.classList.add("stage-link");
-    line.setAttribute("d", `M${x0} ${centerY} C${x0 + 36} ${y} ${x1 - 36} ${y} ${x1} ${centerY}`);
-    line.setAttribute("stroke-opacity", 0.28 + wetPresence * 0.58);
-    stageGroup.append(line);
-
-    const node = svgEl("circle");
-    node.classList.add("stage-node");
-    node.setAttribute("cx", x1);
-    node.setAttribute("cy", centerY);
-    node.setAttribute("r", Math.max(4, 8 + wetPresence * 7 - visibleStages * 0.24));
-    markerGroup.append(node);
-
-    if ((showBaseDelayLabels && i < 4) || i === 0 || i === visibleStages - 1) {
-      const label = svgEl("text");
-      label.classList.add("stage-label");
-      label.setAttribute("x", x1);
-      label.setAttribute("y", centerY + 38);
-      label.textContent = i === visibleStages - 1 && activeStages > visibleStages
-        ? `${activeStages}x`
-        : `${(baseDelays[i % baseDelays.length] * scale).toFixed(1)} ms`;
-      markerGroup.append(label);
-    }
-  }
-
-  const energy = [];
-  for (let i = 0; i <= 140; i++) {
-    const t = i / 140;
-    const x = GRAPH.left + span * t;
-    const wave = Math.sin(t * Math.PI * (10 + size * 9 + effectiveOrder * 0.22));
-    const envelope = (1 - t) ** 1.2;
-    const y = centerY + wave * envelope * (18 + wetPresence * 42) * mix * wetPresence;
-    energy.push({ x, y });
-  }
-  document.querySelector("#energy-line")?.setAttribute("d", path(energy));
-}
-
-function applySnapshot(snapshot) {
-  for (const [id, value] of snapshot) {
-    controls.get(id)?.paint(value);
-  }
-  status.textContent = "CONNECTED";
-}
-
-window.addEventListener("message", (event) => {
-  if (!(event.data instanceof ArrayBuffer)) return;
-  const snapshot = decodeParamsSnapshot(event.data);
-  if (snapshot) applySnapshot(snapshot);
+const sendSet = connect({
+  onSnapshot: (snapshot) => {
+    params.applySnapshot(snapshot);
+    markConnected();
+  },
 });
 
-buildControls();
-paintGraph();
-window.parent.postMessage(encodeReady(), "*");
+const params = createParams(PARAMS, sendSet, () => viz.redraw(), ".panels");
+
+function mulberry(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const canvas = document.getElementById("viz");
+
+const viz = setupCanvas(canvas, () => {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.clearRect(0, 0, w, h);
+
+  const mix = params.get(P.mix);
+  const diffusion = params.get(P.diffusion);
+  const size = params.get(P.size);
+  const width = params.get(P.width);
+  const count = Math.round(params.get(P.allpassCount));
+  const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+  const mid = h / 2;
+
+  // Stereo lane guides.
+  ctx.strokeStyle = "rgba(126, 147, 163, 0.15)";
+  for (const frac of [0.5]) {
+    ctx.beginPath();
+    ctx.moveTo(0, h * frac);
+    ctx.lineTo(w, h * frac);
+    ctx.stroke();
+  }
+  ctx.fillStyle = "rgba(126, 147, 163, 0.5)";
+  ctx.font = `${9 * dpr}px sans-serif`;
+  ctx.fillText("L", 6 * dpr, 12 * dpr);
+  ctx.fillText("R", 6 * dpr, h - 6 * dpr);
+
+  // Dry impulse.
+  ctx.strokeStyle = "#cfe7db";
+  ctx.lineWidth = 2 * dpr;
+  ctx.beginPath();
+  ctx.moveTo(3 * dpr, mid - h * 0.42 * (1 - mix * 0.6));
+  ctx.lineTo(3 * dpr, mid + h * 0.42 * (1 - mix * 0.6));
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  // Echo cloud: each allpass stage emits echoes further out; diffusion
+  // multiplies how many, size stretches arrival times.
+  const rand = mulberry(7);
+  const echoes = Math.round(count * (2 + diffusion * 10));
+  const spanBoost = 0.15 + size * 0.85;
+  for (let i = 0; i < echoes; i++) {
+    const stage = Math.floor(rand() * count) + 1;
+    const frac = stage / count;
+    // Later stages arrive later and denser; jitter keeps it organic.
+    const t = Math.pow(frac, 1.2) * spanBoost * (0.75 + rand() * 0.5);
+    const x = 8 * dpr + t * (w - 16 * dpr);
+    const pan = (rand() * 2 - 1) * width;
+    const y = mid + pan * h * 0.42;
+    const decay = Math.exp(-2.2 * t);
+    const alpha = mix * (0.12 + 0.55 * decay) * (0.4 + diffusion * 0.6);
+    const r = dpr * (1 + 2.2 * decay);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(79, 200, 209, ${alpha.toFixed(3)})`;
+    ctx.fill();
+  }
+
+  // Density envelope hint.
+  ctx.beginPath();
+  for (let px = 0; px <= w; px++) {
+    const t = px / w;
+    const env = Math.exp(-2.2 * t) * mix;
+    const y = mid - h * 0.45 * env;
+    if (px === 0) ctx.moveTo(px, y);
+    else ctx.lineTo(px, y);
+  }
+  ctx.strokeStyle = accent;
+  ctx.globalAlpha = 0.5;
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+});
+
+let dragStart = null;
+
+canvas.addEventListener("pointerdown", (e) => {
+  dragStart = {
+    x: e.clientX,
+    y: e.clientY,
+    size: params.get(P.size),
+    diffusion: params.get(P.diffusion),
+  };
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!dragStart) return;
+  const rect = canvas.getBoundingClientRect();
+  const size = clamp(dragStart.size + (e.clientX - dragStart.x) / rect.width, 0, 1);
+  const diffusion = clamp(dragStart.diffusion - (e.clientY - dragStart.y) / rect.height, 0, 1);
+  params.set(P.size, size);
+  params.set(P.diffusion, diffusion);
+  sendSet(P.size, size);
+  sendSet(P.diffusion, diffusion);
+  viz.redraw();
+});
+
+canvas.addEventListener("pointerup", () => {
+  dragStart = null;
+});

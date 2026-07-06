@@ -139,6 +139,26 @@ impl Plugin for ZAudioVcslPiano {
         self.params.clone()
     }
 
+    // Windows/macOS get the WebCLAP UI in a wry webview; the plugin
+    // previously had no native editor, so other platforms still return
+    // None (host-generated controls).
+    #[cfg(any(windows, target_os = "macos"))]
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        let p = &self.params;
+        z_audio_webview_editor::webview_editor_from_ui!(
+            "../../z-audio-webclap-vcsl-piano/ui",
+            (640, 480),
+            vec![
+                z_audio_webview_editor::map(180, p.master_gain.as_ptr()),
+                z_audio_webview_editor::map(181, p.tone.as_ptr()),
+                z_audio_webview_editor::map(182, p.velocity_curve.as_ptr()),
+                z_audio_webview_editor::map(183, p.release_level.as_ptr()),
+                z_audio_webview_editor::map(184, p.release_time.as_ptr()),
+                z_audio_webview_editor::map(185, p.stereo_width.as_ptr()),
+            ]
+        )
+    }
+
     fn initialize(
         &mut self,
         _audio_io_layout: &AudioIOLayout,

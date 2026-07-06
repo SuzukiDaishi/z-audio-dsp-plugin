@@ -86,6 +86,35 @@ impl Plugin for ZAudioSimpleEq {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        // Windows/macOS: reuse the WebCLAP UI inside a wry webview (see
+        // crates/z-audio-webview-editor). Linux hosts can't embed a
+        // webview in the plugin window, so they keep the egui editor.
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let p = &self.params;
+            return z_audio_webview_editor::webview_editor_from_ui!(
+                "../../z-audio-webclap-eq/ui",
+                (960, 540),
+                vec![
+                    z_audio_webview_editor::map(40, p.low.enabled.as_ptr()),
+                    z_audio_webview_editor::map(41, p.low.freq.as_ptr()),
+                    z_audio_webview_editor::map(42, p.low.kind.as_ptr()),
+                    z_audio_webview_editor::map(49, p.low.gain_db.as_ptr()),
+                    z_audio_webview_editor::map(50, p.low.q.as_ptr()),
+                    z_audio_webview_editor::map(43, p.mid.enabled.as_ptr()),
+                    z_audio_webview_editor::map(44, p.mid.freq.as_ptr()),
+                    z_audio_webview_editor::map(45, p.mid.kind.as_ptr()),
+                    z_audio_webview_editor::map(51, p.mid.gain_db.as_ptr()),
+                    z_audio_webview_editor::map(52, p.mid.q.as_ptr()),
+                    z_audio_webview_editor::map(46, p.high.enabled.as_ptr()),
+                    z_audio_webview_editor::map(47, p.high.freq.as_ptr()),
+                    z_audio_webview_editor::map(48, p.high.kind.as_ptr()),
+                    z_audio_webview_editor::map(53, p.high.gain_db.as_ptr()),
+                    z_audio_webview_editor::map(54, p.high.q.as_ptr())
+                ]
+            );
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         editor::create_eq_editor(self.params.clone())
     }
 

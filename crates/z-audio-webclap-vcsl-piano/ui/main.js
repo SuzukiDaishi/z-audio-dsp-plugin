@@ -1,122 +1,146 @@
+// Z Audio VCSL Piano UI — velocity-response editor + tone/release.
+//
+// The canvas plots how MIDI velocity maps to loudness for the sampled
+// piano. Dragging the curve up makes soft playing louder (compressed
+// response); down demands harder playing (expanded). Tone is drawn as a
+// brightness tint on the curve itself.
+
+"use strict";
+
+import { connect, createParams, setupCanvas, markConnected, clamp, fmt } from "./zui.js";
+
+const P = {
+  masterGain: 180,
+  tone: 181,
+  velocityCurve: 182,
+  releaseLevel: 183,
+  releaseTime: 184,
+  stereoWidth: 185,
+};
+
 const PARAMS = [
-  { id: 180, label: "Master Gain", min: -24, max: 12, default: 0, unit: " dB" },
-  { id: 181, label: "Tone", min: 0, max: 1, default: 1, unit: "" },
-  { id: 182, label: "Velocity Curve", min: 0, max: 1, default: 0.5, unit: "" },
-  { id: 183, label: "Release Level", min: -24, max: 12, default: 0, unit: " dB" },
-  { id: 184, label: "Release Time", min: 0.05, max: 5, default: 0.35, unit: " s" },
-  { id: 185, label: "Stereo Width", min: 0, max: 1, default: 1, unit: "" },
+  { id: P.masterGain, label: "Master", kind: "slider", min: -24, max: 12, default: 0, step: 0.1, fmt: fmt.db, mount: "#sec-tone" },
+  { id: P.tone, label: "Tone", kind: "slider", min: 0, max: 1, default: 1, step: 0.01, fmt: fmt.pct, mount: "#sec-tone" },
+  { id: P.stereoWidth, label: "Width", kind: "slider", min: 0, max: 1, default: 1, step: 0.01, fmt: fmt.pct, mount: "#sec-tone" },
+  { id: P.velocityCurve, label: "Vel Curve", kind: "slider", min: 0, max: 1, default: 0.5, step: 0.01, fmt: fmt.pct, mount: "#sec-release" },
+  { id: P.releaseLevel, label: "Rel Level", kind: "slider", min: -24, max: 12, default: 0, step: 0.1, fmt: fmt.db, mount: "#sec-release" },
+  { id: P.releaseTime, label: "Rel Time", kind: "slider", min: 0.05, max: 5, default: 0.35, scale: "log", fmt: fmt.s, mount: "#sec-release" },
 ];
 
-const controlsForm = document.querySelector("#controls");
-const status = document.querySelector("#status");
-const controls = new Map();
-
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function formatValue(def, value) {
-  return `${value.toFixed(2)}${def.unit}`;
-}
-
-function encodeReady() {
-  return new Uint8Array([0x65, 0x72, 0x65, 0x61, 0x64, 0x79]).buffer;
-}
-
-function encodeSet(id, value) {
-  const buf = new ArrayBuffer(20);
-  const view = new DataView(buf);
-  view.setUint8(0, 0xa1);
-  view.setUint8(1, 0x63);
-  view.setUint8(2, 0x73);
-  view.setUint8(3, 0x65);
-  view.setUint8(4, 0x74);
-  view.setUint8(5, 0x82);
-  view.setUint8(6, 0x1a);
-  view.setUint32(7, id, false);
-  view.setUint8(11, 0xfb);
-  view.setFloat64(12, value, false);
-  return buf;
-}
-
-function decodeParamsSnapshot(ab) {
-  const view = new DataView(ab);
-  let p = 0;
-  if (view.byteLength < 9 || view.getUint8(p++) !== 0xa1 || view.getUint8(p++) !== 0x66) {
-    return null;
-  }
-  if (String.fromCharCode(...new Uint8Array(ab, p, 6)) !== "params") return null;
-  p += 6;
-
-  const head = view.getUint8(p++);
-  if ((head & 0xe0) !== 0xa0) return null;
-  let count = head & 0x1f;
-  if (count === 24) count = view.getUint8(p++);
-  if (count > 255) return null;
-
-  const out = new Map();
-  for (let i = 0; i < count; i++) {
-    if (p + 13 > view.byteLength || view.getUint8(p++) !== 0x1a) return null;
-    const key = view.getUint32(p, false);
-    p += 4;
-    if (view.getUint8(p++) !== 0xfb) return null;
-    const val = view.getFloat64(p, false);
-    p += 8;
-    out.set(key, val);
-  }
-  return out;
-}
-
-function sendSet(id, value) {
-  window.parent.postMessage(encodeSet(id, value), "*");
-}
-
-function createControl(def) {
-  const wrap = document.createElement("label");
-  wrap.className = "control";
-
-  const title = document.createElement("span");
-  title.className = "control-label";
-  title.textContent = def.label;
-
-  const readout = document.createElement("span");
-  readout.className = "readout";
-  readout.textContent = formatValue(def, def.default);
-
-  const input = document.createElement("input");
-  input.type = "range";
-  input.min = def.min;
-  input.max = def.max;
-  input.step = (def.max - def.min) / 200;
-  input.value = def.default;
-
-  input.addEventListener("input", () => {
-    const value = clamp(Number(input.value), def.min, def.max);
-    readout.textContent = formatValue(def, value);
-    sendSet(def.id, value);
-  });
-
-  wrap.append(title, input, readout);
-  controlsForm.append(wrap);
-  controls.set(def.id, { input, readout, def });
-}
-
-function applySnapshot(snapshot) {
-  for (const [id, value] of snapshot) {
-    const control = controls.get(id);
-    if (!control) continue;
-    const clamped = clamp(value, control.def.min, control.def.max);
-    control.input.value = clamped;
-    control.readout.textContent = formatValue(control.def, clamped);
-  }
-  status.textContent = "CONNECTED";
-}
-
-window.addEventListener("message", (event) => {
-  if (!(event.data instanceof ArrayBuffer)) return;
-  const snapshot = decodeParamsSnapshot(event.data);
-  if (snapshot) applySnapshot(snapshot);
+const sendSet = connect({
+  onSnapshot: (snapshot) => {
+    params.applySnapshot(snapshot);
+    markConnected();
+  },
 });
 
-PARAMS.forEach(createControl);
-window.parent.postMessage(encodeReady(), "*");
+const params = createParams(PARAMS, sendSet, () => viz.redraw(), ".panels");
+
+// Velocity shaping: curve 0.5 is linear-ish; lower = harder (expanded),
+// higher = softer playing gets louder (compressed). Exponent mirrors the
+// synth-side shaping.
+function shape(v01, curve) {
+  const exponent = 2 - clamp(curve, 0, 1) * 2 + 0.0001;
+  return Math.pow(clamp(v01, 0, 1), exponent);
+}
+
+const canvas = document.getElementById("viz");
+
+const viz = setupCanvas(canvas, () => {
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  const dpr = window.devicePixelRatio || 1;
+  ctx.clearRect(0, 0, w, h);
+
+  const curve = params.get(P.velocityCurve);
+  const tone = params.get(P.tone);
+  const pad = 10 * dpr;
+
+  // Grid quarters.
+  ctx.strokeStyle = "rgba(126, 147, 163, 0.12)";
+  ctx.fillStyle = "rgba(126, 147, 163, 0.5)";
+  ctx.font = `${9 * dpr}px sans-serif`;
+  for (let i = 1; i < 4; i++) {
+    const x = pad + ((w - 2 * pad) * i) / 4;
+    const y = h - pad - ((h - 2 * pad) * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(x, pad);
+    ctx.lineTo(x, h - pad);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(pad, y);
+    ctx.lineTo(w - pad, y);
+    ctx.stroke();
+  }
+  ctx.fillText("pp", pad + 2 * dpr, h - pad - 3 * dpr);
+  ctx.fillText("ff", w - pad - 12 * dpr, h - pad - 3 * dpr);
+
+  // Diagonal reference.
+  ctx.strokeStyle = "rgba(126, 147, 163, 0.3)";
+  ctx.setLineDash([4 * dpr, 4 * dpr]);
+  ctx.beginPath();
+  ctx.moveTo(pad, h - pad);
+  ctx.lineTo(w - pad, pad);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Velocity curve — hue shifts warmer/darker as Tone rolls off.
+  const bright = Math.round(197 + tone * 40);
+  const color = `rgb(232, ${bright}, ${Math.round(106 + (1 - tone) * 40)})`;
+  ctx.beginPath();
+  for (let px = 0; px <= w - 2 * pad; px++) {
+    const v = px / (w - 2 * pad);
+    const y = h - pad - shape(v, curve) * (h - 2 * pad);
+    if (px === 0) ctx.moveTo(pad + px, y);
+    else ctx.lineTo(pad + px, y);
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2 * dpr;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 6 * dpr;
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 1;
+
+  // Fill under curve.
+  ctx.beginPath();
+  ctx.moveTo(pad, h - pad);
+  for (let px = 0; px <= w - 2 * pad; px += 2) {
+    const v = px / (w - 2 * pad);
+    ctx.lineTo(pad + px, h - pad - shape(v, curve) * (h - 2 * pad));
+  }
+  ctx.lineTo(w - pad, h - pad);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(232, 197, 106, 0.08)";
+  ctx.fill();
+
+  // Mid-velocity handle dot.
+  const hx = pad + (w - 2 * pad) * 0.5;
+  const hy = h - pad - shape(0.5, curve) * (h - 2 * pad);
+  ctx.beginPath();
+  ctx.arc(hx, hy, 4.5 * dpr, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+});
+
+// Vertical drag anywhere on the canvas bends the curve.
+let dragStart = null;
+
+canvas.addEventListener("pointerdown", (e) => {
+  dragStart = { y: e.clientY, curve: params.get(P.velocityCurve) };
+  canvas.setPointerCapture(e.pointerId);
+});
+
+canvas.addEventListener("pointermove", (e) => {
+  if (!dragStart) return;
+  const rect = canvas.getBoundingClientRect();
+  const curve = clamp(dragStart.curve - (e.clientY - dragStart.y) / rect.height, 0, 1);
+  params.set(P.velocityCurve, curve);
+  sendSet(P.velocityCurve, curve);
+  viz.redraw();
+});
+
+canvas.addEventListener("pointerup", () => {
+  dragStart = null;
+});

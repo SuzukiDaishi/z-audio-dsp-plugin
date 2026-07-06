@@ -8,6 +8,8 @@ This workspace builds native and WebCLAP wrappers for:
 - `Z Audio Simple EQ`: mono/stereo audio input to audio output
 - `Z Audio Formula Piano`: modal/formula piano instrument
 - `Z Audio VCSL Piano`: sampler piano built from VCSL Keys "Grand Piano, K"
+- `Z Audio Sampler`: multi-zone WebCLAP sampler with GUI file loading and
+  auto-slicing (see below)
 - `Z Audio Formula Drum Set`: modal/formula GM drum set instrument
 - `Z Audio Parametric Reverb`: stereo FDN reverb effect
 - `Z Audio Limiter`: stereo lookahead limiter effect
@@ -175,8 +177,8 @@ The built-in source can generate sine, triangle, white noise, pink noise, or
 brown noise, or play a browser-decodable audio file through the chain. Web MIDI
 input is available from the source panel when the browser and device allow it.
 
-The synth, EQ, reverb, limiter, and compressor tarballs contain these paths at
-archive root:
+The plugins with a custom UI (synth, EQ, reverb, diffuser, limiter,
+compressor, VCSL piano, sampler) ship these paths at archive root:
 
 ```text
 module.wasm
@@ -184,10 +186,97 @@ plugin.json
 ui/index.html
 ui/main.js
 ui/styles.css
+ui/zui.js        (shared Z Audio UI kit: transport + controls + canvas)
 ```
+
+All UIs share one design system (`ui/zui.js` + `ui/styles.css`, copied
+into each bundle with a per-plugin accent color) and put an interactive,
+plugin-specific visualization front and center:
+
+- **Simple Synth** — live scopes for the oscillator shape, amp envelope,
+  and LFO that track the controls.
+- **Simple EQ** — a log-frequency response editor with draggable band
+  nodes (drag = freq/gain, wheel = Q, double-click = band on/off); the
+  plotted curves are exact RBJ biquad responses.
+- **Compressor** — a soft-knee transfer curve you can drag (threshold /
+  ratio) and wheel (knee), with gain-reduction shading.
+- **Limiter** — a brickwall transfer curve with draggable threshold and
+  ceiling.
+- **Parametric Reverb** — a stylized impulse response showing pre-delay,
+  early reflections, decay tail, damping, and width; drag the tail to
+  edit decay/damping.
+- **Diffuser** — an echo-density cloud (one dot per emerging echo);
+  drag to reshape size/diffusion.
+- **VCSL Piano** — a draggable velocity→loudness response curve.
+- **Sampler** — see the sampler section above.
 
 The piano and drum WebCLAP bundles currently expose host parameters without a
 custom WebCLAP UI, so their tarballs contain `module.wasm` and `plugin.json`.
+
+## Z Audio Sampler (WebCLAP)
+
+`z-audio-webclap-sampler` is a Logic Quick Sampler-style instrument: load an
+audio file from the plugin GUI, and it is decoded in the WebView with
+`decodeAudioData`, streamed to the wasm plugin in 128 KiB binary chunks over
+`clap.webview/3`, and cut into key-mapped zones. All heavy work (decode,
+upload assembly, zone cutting) happens outside `process()`; the audio path
+only reads prepared `SampleRegion`s.
+
+Modes (chosen in the UI, mapped to a zone table the engine plays as-is):
+
+- **Classic** — the whole (trimmed) sample mapped chromatically around a
+  root key, with loop modes Off / Forward / Sustain / Ping-Pong / Reverse,
+  draggable trim + loop markers, and loop crossfade.
+- **One Shot** — plays through per note and ignores note-off.
+- **Slice** — auto-cut at detected onsets (sensitivity control) or an
+  equal grid (4/8/16/32), one key per slice from a base key up; markers can
+  be added (double-click), removed, and dragged. Up to 128 zones.
+
+Slice-point estimation (`ui/onsets.js`) uses the standard spectral-flux
+recipe rather than a plain level detector: STFT (Hann 1024 / hop 256) →
+log-compressed magnitudes → half-wave-rectified flux → adaptive
+median-plus-floor threshold → peak picking with a minimum inter-onset gap
+→ sample-accurate refinement to the attack start with a declick snap. It
+therefore also catches pitch/timbre changes that have no level dip, scales
+its floor to the trimmed region's strongest hit, and stays quiet on steady
+material. The expensive curve is cached per file, so the sensitivity
+slider re-picks in real time.
+
+Global parameters (automatable): master gain, ADSR, tune, transpose,
+velocity sensitivity, stereo width. A small embedded piano preview bank is
+mapped as one Classic zone at startup, so the instrument makes sound before
+any file is loaded. Samples up to 60 seconds (stereo, source rate preserved
+as metadata) are accepted; longer files are truncated by the UI.
+
+The UI <-> plugin binary protocol is documented in
+`crates/z-audio-webclap-sampler/src/protocol.rs`. Sample PCM is not stored
+in host projects yet; the generic `clap.state` blob persists parameters
+only, so reload the file after reopening a project.
+
+## Native VST3/CLAP Webview Editors
+
+On Windows and macOS the native VST3/CLAP builds of the synth, EQ, reverb,
+diffuser, limiter, compressor, and VCSL piano open the *same* web UI as
+their WebCLAP builds, rendered in a [wry](https://github.com/tauri-apps/wry)
+webview (the engine Tauri uses) embedded in the host's plugin window:
+
+- `crates/nih-plug-webview/` — vendored fork (ISC) of
+  [nih-plug-webview](https://github.com/httnn/nih-plug-webview), pinned to
+  this workspace's `nih_plug`/`baseview` revisions (see its `NOTICE.md`).
+- `crates/z-audio-webview-editor/` — inlines each WebCLAP `ui/` bundle
+  into one self-contained HTML page at compile time and bridges the UI's
+  numeric param ids to `nih_plug` `ParamPtr`s over a JSON IPC protocol
+  (`{"type":"set"|"ready"|"params",…}`). The UI kit's `connect()` detects
+  the wry bridge at runtime, so one UI source serves both plugin formats.
+  Host-side automation and preset loads are pushed back to the UI by a
+  per-frame diff of parameter values.
+
+On Linux, wry cannot embed a webview into a host-owned plugin window, so
+the native plugins keep their egui editors (the VCSL piano, which never
+had one, keeps host-generated controls). The WebCLAP builds are unaffected
+everywhere. Note that the reverb's Mod Rate/Depth controls exist only in
+the WebCLAP DSP, so in the native webview UI those two sliders are
+inactive.
 
 ## Plugin IDs
 
@@ -277,6 +366,8 @@ node --check crates/z-audio-webclap-eq/ui/main.js
 node --check crates/z-audio-webclap-reverb/ui/main.js
 node --check crates/z-audio-webclap-limiter/ui/main.js
 node --check crates/z-audio-webclap-compressor/ui/main.js
+node --check crates/z-audio-webclap-sampler/ui/main.js
+node --test crates/z-audio-webclap-sampler/ui/onsets.test.mjs
 ```
 
 Packaging smoke checks:

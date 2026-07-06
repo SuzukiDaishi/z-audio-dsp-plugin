@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" style="--accent: #e8c56a; --accent-soft: rgba(232, 197, 106, 0.16)">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -13,12 +13,25 @@
           <h1>VCSL Piano</h1>
           <p class="eyebrow">Z AUDIO INSTRUMENT</p>
         </div>
-        <span id="status">Waiting for host</span>
+        <div class="header-right">
+          <span class="header-note">drag curve: velocity response</span>
+          <span id="status">Waiting for host</span>
+        </div>
       </header>
-      <p class="bank-note">
-        VCSL Keys &mdash; Grand Piano, K (preview bank: C2, C3, C4, G4, C5, C6)
-      </p>
-      <form id="controls" class="controls" autocomplete="off"></form>
+
+      <div class="viz" style="min-height: 118px">
+        <canvas id="viz" title="Drag up/down: velocity response"></canvas>
+        <span class="viz-caption">Velocity → loudness</span>
+      </div>
+
+      <div class="panels cols-2">
+        <section class="section" id="sec-tone">
+          <h2 class="section-title">Tone</h2>
+        </section>
+        <section class="section" id="sec-release">
+          <h2 class="section-title">Release</h2>
+        </section>
+      </div>
     </main>
     <script type="module" src="./main.js"></script>
   </body>

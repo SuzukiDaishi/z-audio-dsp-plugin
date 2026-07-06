@@ -3,9 +3,13 @@
   "id": "dev.zaudio.sampler",
   "name": "Z Audio Sampler",
   "vendor": "zukky",
-  "version": "0.1.0",
-  "description": "General-purpose single-sample sampler instrument built on z-audio-dsp, packaged as a real WCLAP plugin.",
-  "features": ["instrument", "sampler", "stereo"],
+  "version": "0.2.0",
+  "description": "Multi-zone sampler: load audio in the UI, auto-slice, and map zones to keys. Built on z-audio-dsp.",
+  "features": [
+    "instrument",
+    "sampler",
+    "stereo"
+  ],
   "license": "MIT",
   "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
   "source": "src/",
@@ -13,14 +17,24 @@
   "format": "wasm",
   "has_ui": true,
   "ui": {
-    "compact_size": { "width": 480, "height": 520 },
-    "expanded_size": { "width": 640, "height": 620 }
+    "compact_size": {
+      "width": 560,
+      "height": 640
+    },
+    "expanded_size": {
+      "width": 720,
+      "height": 720
+    }
   },
   "plugins": [
     {
       "id": "dev.zaudio.sampler",
       "name": "Z Audio Sampler",
-      "features": ["instrument", "sampler", "stereo"],
+      "features": [
+        "instrument",
+        "sampler",
+        "stereo"
+      ],
       "has_ui": true
     }
   ]

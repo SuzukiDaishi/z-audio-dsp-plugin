@@ -13,12 +13,86 @@
           <h1>Sampler</h1>
           <p class="eyebrow">Z AUDIO INSTRUMENT</p>
         </div>
-        <span id="status">Waiting for host</span>
+        <div class="header-right">
+          <span id="file-label" class="file-label">No file</span>
+          <span id="status">Waiting for host</span>
+        </div>
       </header>
-      <p class="bank-note">
-        Embedded preview bank: docs/samples/piano.wav (4s, mono)
-      </p>
-      <form id="controls" class="controls" autocomplete="off"></form>
+
+      <section class="wave-section">
+        <div id="wave-wrap" class="wave-wrap">
+          <canvas id="wave"></canvas>
+          <div id="drop-hint" class="drop-hint">
+            <strong>Drop an audio file</strong>
+            <span>or click to browse — wav / aiff / mp3 / ogg / flac</span>
+          </div>
+          <input
+            id="file-input"
+            type="file"
+            accept="audio/*,.wav,.aif,.aiff,.mp3,.ogg,.flac"
+            hidden
+          />
+        </div>
+        <div id="sample-info" class="sample-info"></div>
+      </section>
+
+      <nav class="mode-tabs" id="mode-tabs">
+        <button type="button" data-mode="classic" class="active">CLASSIC</button>
+        <button type="button" data-mode="oneshot">ONE SHOT</button>
+        <button type="button" data-mode="slice">SLICE</button>
+      </nav>
+
+      <section id="mode-panel" class="mode-panel">
+        <div class="mode-row" id="row-pitched">
+          <label class="inline">
+            <span>Root</span>
+            <select id="root-note"></select>
+          </label>
+          <label class="inline" id="loop-mode-wrap">
+            <span>Loop</span>
+            <select id="loop-mode">
+              <option value="0">Off</option>
+              <option value="1">Forward</option>
+              <option value="2">Sustain</option>
+              <option value="3">Ping-Pong</option>
+              <option value="4">Reverse</option>
+            </select>
+          </label>
+          <label class="inline slider" id="loop-xfade-wrap">
+            <span>Xfade</span>
+            <input id="loop-xfade" type="range" min="0" max="0.2" step="0.001" value="0.01" />
+            <em id="loop-xfade-value">10 ms</em>
+          </label>
+        </div>
+        <div class="mode-row" id="row-slice" hidden>
+          <label class="inline">
+            <span>Detect</span>
+            <select id="slice-grid">
+              <option value="transient">Transient</option>
+              <option value="4">4 slices</option>
+              <option value="8">8 slices</option>
+              <option value="16">16 slices</option>
+              <option value="32">32 slices</option>
+            </select>
+          </label>
+          <label class="inline slider" id="slice-sensitivity-wrap">
+            <span>Sensitivity</span>
+            <input id="slice-sensitivity" type="range" min="0" max="1" step="0.01" value="0.5" />
+          </label>
+          <label class="inline">
+            <span>From key</span>
+            <select id="slice-base-key"></select>
+          </label>
+          <span id="slice-count" class="slice-count"></span>
+        </div>
+        <p class="hint" id="mode-hint"></p>
+      </section>
+
+      <section class="params" id="params"></section>
+
+      <section class="keys-section">
+        <div id="keyboard" class="keyboard"></div>
+      </section>
     </main>
     <script type="module" src="./main.js"></script>
   </body>

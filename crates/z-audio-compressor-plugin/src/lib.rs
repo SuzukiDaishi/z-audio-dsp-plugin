@@ -179,6 +179,30 @@ impl Plugin for ZAudioCompressor {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        // Windows/macOS: reuse the WebCLAP UI inside a wry webview (see
+        // crates/z-audio-webview-editor). Linux hosts can't embed a
+        // webview in the plugin window, so they keep the egui editor.
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let p = &self.params;
+            return z_audio_webview_editor::webview_editor_from_ui!(
+                "../../z-audio-webclap-compressor/ui",
+                (920, 620),
+                vec![
+                    z_audio_webview_editor::map(140, p.input_gain.as_ptr()),
+                    z_audio_webview_editor::map(141, p.threshold.as_ptr()),
+                    z_audio_webview_editor::map(142, p.ratio.as_ptr()),
+                    z_audio_webview_editor::map(143, p.knee.as_ptr()),
+                    z_audio_webview_editor::map(144, p.attack.as_ptr()),
+                    z_audio_webview_editor::map(145, p.release.as_ptr()),
+                    z_audio_webview_editor::map(146, p.makeup_gain.as_ptr()),
+                    z_audio_webview_editor::map(147, p.mix.as_ptr()),
+                    z_audio_webview_editor::map(148, p.detector.as_ptr()),
+                    z_audio_webview_editor::map(149, p.stereo_link.as_ptr())
+                ]
+            );
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         editor::create_compressor_editor(self.params.clone(), self.meters.clone())
     }
 

@@ -153,6 +153,28 @@ impl Plugin for ZAudioLimiter {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        // Windows/macOS: reuse the WebCLAP UI inside a wry webview (see
+        // crates/z-audio-webview-editor). Linux hosts can't embed a
+        // webview in the plugin window, so they keep the egui editor.
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let p = &self.params;
+            return z_audio_webview_editor::webview_editor_from_ui!(
+                "../../z-audio-webclap-limiter/ui",
+                (880, 560),
+                vec![
+                    z_audio_webview_editor::map(120, p.input_gain.as_ptr()),
+                    z_audio_webview_editor::map(121, p.threshold.as_ptr()),
+                    z_audio_webview_editor::map(122, p.ceiling.as_ptr()),
+                    z_audio_webview_editor::map(123, p.release.as_ptr()),
+                    z_audio_webview_editor::map(124, p.lookahead.as_ptr()),
+                    z_audio_webview_editor::map(125, p.stereo_link.as_ptr()),
+                    z_audio_webview_editor::map(126, p.true_peak.as_ptr()),
+                    z_audio_webview_editor::map(127, p.output_gain.as_ptr())
+                ]
+            );
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         editor::create_limiter_editor(self.params.clone(), self.meters.clone())
     }
 
