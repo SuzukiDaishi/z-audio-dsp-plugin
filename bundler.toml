@@ -21,3 +21,6 @@ name = "Z Audio Limiter"
 
 [z-audio-compressor-plugin]
 name = "Z Audio Compressor"
+
+[z-audio-sampler-plugin]
+name = "Z Audio Sampler"

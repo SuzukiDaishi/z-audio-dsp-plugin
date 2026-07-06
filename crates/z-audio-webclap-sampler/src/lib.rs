@@ -11,9 +11,13 @@
 //! Until a file is loaded, an embedded preview bank (mono piano, see
 //! `cargo xtask prepare-sampler-bank`) is mapped as a single chromatic
 //! zone so the instrument makes sound out of the box.
+//!
+//! The [`engine`] and [`protocol`] modules are `pub` because this crate
+//! doubles as the engine/protocol library for the native VST3/CLAP build
+//! (`crates/z-audio-sampler-plugin`), which links it as an rlib.
 
-mod engine;
-mod protocol;
+pub mod engine;
+pub mod protocol;
 
 use std::sync::OnceLock;
 
@@ -25,6 +29,11 @@ use wclap_plugin::{
 };
 
 const DEV_BANK_BYTES: &[u8] = include_bytes!("../../../assets/sampler/piano-dev.bank");
+
+/// Embedded startup preview bank, shared by the WebCLAP and native builds.
+pub fn dev_bank() -> Option<(engine::SourceSample, u8)> {
+    engine::parse_dev_bank(DEV_BANK_BYTES)
+}
 
 // Parameter IDs — a fresh surface for the multi-zone sampler (the old
 // single-sample sampler used 200-213).
@@ -302,7 +311,9 @@ fn reserve<T>(vec: &mut Vec<T>, wanted: usize) {
     }
 }
 
-#[no_mangle]
+// Only exported from the wasm cdylib; the native VST3/CLAP plugin links
+// this crate as an rlib and must not re-export a WASI entry point.
+#[cfg_attr(target_arch = "wasm32", no_mangle)]
 pub extern "C" fn _initialize() {
     init_plugin::<ZAudioWebSampler>(&PLUGIN_DEF);
 }

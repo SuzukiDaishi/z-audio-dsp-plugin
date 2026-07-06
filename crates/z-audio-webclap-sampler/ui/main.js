@@ -51,7 +51,16 @@ function noteName(key) {
 
 // ---------------------------------------------------------------------------
 // Transport.
+//
+// Two backends, same ZSMP packets:
+//  - WebCLAP: raw ArrayBuffers over clap.webview/3 postMessage.
+//  - Native VST3/CLAP (Windows/macOS): the wry webview injects
+//    sendToPlugin/onPluginMessage (see crates/z-audio-webview-editor);
+//    ZSMP packets ride a {"type":"bin","data":<base64>} JSON envelope and
+//    params use the same {"ready"|"set"|"params"} JSON as the other UIs.
 // ---------------------------------------------------------------------------
+
+const NATIVE = typeof window.sendToPlugin === "function";
 
 const MAGIC = [0x5a, 0x53, 0x4d, 0x50]; // "ZSMP"
 const OP_BEGIN = 0x01;
@@ -62,10 +71,32 @@ const OP_STATUS = 0x81;
 
 const MAX_ZONES = 128;
 const MAX_SAMPLE_FLOATS = 48000 * 60 * 2; // 60 s of stereo 48 kHz
-const CHUNK_FLOATS = 32768; // 128 KiB per chunk message
+// 128 KiB per chunk over WebCLAP postMessage; smaller on the native path so
+// each base64ed IPC string stays well under per-message limits.
+const CHUNK_FLOATS = NATIVE ? 8192 : 32768;
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  const step = 0x8000; // keep String.fromCharCode's argument list bounded
+  for (let i = 0; i < bytes.length; i += step) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + step));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(text) {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 
 function post(buffer) {
-  window.parent.postMessage(buffer, "*");
+  if (NATIVE) {
+    window.sendToPlugin({ type: "bin", data: bytesToBase64(new Uint8Array(buffer)) });
+  } else {
+    window.parent.postMessage(buffer, "*");
+  }
 }
 
 function zsmpPacket(op, bodyBytes) {
@@ -140,7 +171,11 @@ function decodeStatus(ab) {
 }
 
 function sendSet(id, value) {
-  post(encodeSet(id, value));
+  if (NATIVE) {
+    window.sendToPlugin({ type: "set", id, value });
+  } else {
+    post(encodeSet(id, value));
+  }
 }
 
 function sendNote(on, key, velocity) {
@@ -828,24 +863,40 @@ keyboardEl.addEventListener("pointerleave", previewOff);
 // Plugin messages.
 // ---------------------------------------------------------------------------
 
-window.addEventListener("message", (event) => {
-  if (!(event.data instanceof ArrayBuffer)) return;
-  const status = decodeStatus(event.data);
-  if (status) {
-    state.pluginStatus = status;
-    if (status.hasSample && !state.mono) {
-      const secs = status.sampleRate > 0 ? status.frames / status.sampleRate : 0;
-      sampleInfo.textContent =
-        `Plugin: ${status.sampleRate.toFixed(0)} Hz · ${status.channels} ch · ` +
-        `${secs.toFixed(2)} s · ${status.zones} zone${status.zones === 1 ? "" : "s"} ` +
-        `(drop a file to replace)`;
-    }
-    statusEl.textContent = "CONNECTED";
-    return;
+function handleStatus(status) {
+  state.pluginStatus = status;
+  if (status.hasSample && !state.mono) {
+    const secs = status.sampleRate > 0 ? status.frames / status.sampleRate : 0;
+    sampleInfo.textContent =
+      `Plugin: ${status.sampleRate.toFixed(0)} Hz · ${status.channels} ch · ` +
+      `${secs.toFixed(2)} s · ${status.zones} zone${status.zones === 1 ? "" : "s"} ` +
+      `(drop a file to replace)`;
   }
-  const snapshot = decodeParamsSnapshot(event.data);
-  if (snapshot) applySnapshot(snapshot);
-});
+  statusEl.textContent = "CONNECTED";
+}
+
+if (NATIVE) {
+  window.onPluginMessage = (msg) => {
+    if (!msg) return;
+    if (msg.type === "params" && msg.values) {
+      applySnapshot(new Map(Object.entries(msg.values).map(([id, v]) => [Number(id), v])));
+    } else if (msg.type === "bin" && typeof msg.data === "string") {
+      const status = decodeStatus(base64ToBytes(msg.data).buffer);
+      if (status) handleStatus(status);
+    }
+  };
+} else {
+  window.addEventListener("message", (event) => {
+    if (!(event.data instanceof ArrayBuffer)) return;
+    const status = decodeStatus(event.data);
+    if (status) {
+      handleStatus(status);
+      return;
+    }
+    const snapshot = decodeParamsSnapshot(event.data);
+    if (snapshot) applySnapshot(snapshot);
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Boot.
@@ -856,4 +907,8 @@ renderKeyboard();
 resizeCanvas();
 loopXfadeValue.textContent = `${Math.round(state.loopXfadeS * 1000)} ms`;
 sliceSensitivityWrap.style.display = "";
-post(encodeReady());
+if (NATIVE) {
+  window.sendToPlugin({ type: "ready" });
+} else {
+  post(encodeReady());
+}

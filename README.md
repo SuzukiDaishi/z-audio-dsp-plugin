@@ -8,8 +8,8 @@ This workspace builds native and WebCLAP wrappers for:
 - `Z Audio Simple EQ`: mono/stereo audio input to audio output
 - `Z Audio Formula Piano`: modal/formula piano instrument
 - `Z Audio VCSL Piano`: sampler piano built from VCSL Keys "Grand Piano, K"
-- `Z Audio Sampler`: multi-zone WebCLAP sampler with GUI file loading and
-  auto-slicing (see below)
+- `Z Audio Sampler`: multi-zone sampler with GUI file loading and
+  auto-slicing, as WebCLAP and native VST3/CLAP (see below)
 - `Z Audio Formula Drum Set`: modal/formula GM drum set instrument
 - `Z Audio Parametric Reverb`: stereo FDN reverb effect
 - `Z Audio Limiter`: stereo lookahead limiter effect
@@ -105,6 +105,7 @@ Bundle the additional plugins:
 ```powershell
 cargo xtask bundle z-audio-piano-plugin --release
 cargo xtask bundle z-audio-vcsl-piano-plugin --release
+cargo xtask bundle z-audio-sampler-plugin --release
 cargo xtask bundle z-audio-drums-plugin --release
 cargo xtask bundle z-audio-reverb-plugin --release
 cargo xtask bundle z-audio-limiter-plugin --release
@@ -122,6 +123,8 @@ target/bundled/Z Audio Formula Piano.vst3
 target/bundled/Z Audio Formula Piano.clap
 target/bundled/z-audio-vcsl-piano-plugin.vst3
 target/bundled/z-audio-vcsl-piano-plugin.clap
+target/bundled/Z Audio Sampler.vst3
+target/bundled/Z Audio Sampler.clap
 target/bundled/Z Audio Formula Drum Set.vst3
 target/bundled/Z Audio Formula Drum Set.clap
 target/bundled/Z Audio Parametric Reverb.vst3
@@ -213,7 +216,7 @@ plugin-specific visualization front and center:
 The piano and drum WebCLAP bundles currently expose host parameters without a
 custom WebCLAP UI, so their tarballs contain `module.wasm` and `plugin.json`.
 
-## Z Audio Sampler (WebCLAP)
+## Z Audio Sampler
 
 `z-audio-webclap-sampler` is a Logic Quick Sampler-style instrument: load an
 audio file from the plugin GUI, and it is decoded in the WebView with
@@ -221,6 +224,16 @@ audio file from the plugin GUI, and it is decoded in the WebView with
 `clap.webview/3`, and cut into key-mapped zones. All heavy work (decode,
 upload assembly, zone cutting) happens outside `process()`; the audio path
 only reads prepared `SampleRegion`s.
+
+`z-audio-sampler-plugin` is the native VST3/CLAP build of the same
+instrument. It links the WebCLAP crate as a library (same `ZoneSampler`
+engine, same `ZSMP` protocol) and, on Windows/macOS, opens the identical
+web UI in the wry webview; there the `ZSMP` packets ride a
+`{"type":"bin","data":"<base64>"}` JSON envelope over the wry IPC bridge
+instead of raw `clap.webview/3` buffers (smaller upload chunks, same
+packets — see `crates/z-audio-webview-editor`). On other platforms it
+falls back to a reduced egui editor that decodes WAV/FLAC natively and
+maps the file as a single Classic zone (no trim/loop/slice editing).
 
 Modes (chosen in the UI, mapped to a zone table the engine plays as-is):
 
@@ -250,15 +263,16 @@ as metadata) are accepted; longer files are truncated by the UI.
 
 The UI <-> plugin binary protocol is documented in
 `crates/z-audio-webclap-sampler/src/protocol.rs`. Sample PCM is not stored
-in host projects yet; the generic `clap.state` blob persists parameters
-only, so reload the file after reopening a project.
+in host projects yet; both the WebCLAP and native builds persist
+parameters only, so reload the file after reopening a project.
 
 ## Native VST3/CLAP Webview Editors
 
 On Windows and macOS the native VST3/CLAP builds of the synth, EQ, reverb,
-diffuser, limiter, compressor, and VCSL piano open the *same* web UI as
-their WebCLAP builds, rendered in a [wry](https://github.com/tauri-apps/wry)
-webview (the engine Tauri uses) embedded in the host's plugin window:
+diffuser, limiter, compressor, VCSL piano, and sampler open the *same* web
+UI as their WebCLAP builds, rendered in a
+[wry](https://github.com/tauri-apps/wry) webview (the engine Tauri uses)
+embedded in the host's plugin window:
 
 - `crates/nih-plug-webview/` — vendored fork (ISC) of
   [nih-plug-webview](https://github.com/httnn/nih-plug-webview), pinned to
@@ -269,14 +283,18 @@ webview (the engine Tauri uses) embedded in the host's plugin window:
   (`{"type":"set"|"ready"|"params",…}`). The UI kit's `connect()` detects
   the wry bridge at runtime, so one UI source serves both plugin formats.
   Host-side automation and preset loads are pushed back to the UI by a
-  per-frame diff of parameter values.
+  per-frame diff of parameter values. UIs with a binary protocol (the
+  sampler's `ZSMP` packets) additionally exchange
+  `{"type":"bin","data":"<base64>"}` messages, dispatched to a plugin
+  callback via `create_webview_editor_with_messages`.
 
 On Linux, wry cannot embed a webview into a host-owned plugin window, so
 the native plugins keep their egui editors (the VCSL piano, which never
-had one, keeps host-generated controls). The WebCLAP builds are unaffected
-everywhere. Note that the reverb's Mod Rate/Depth controls exist only in
-the WebCLAP DSP, so in the native webview UI those two sliders are
-inactive.
+had one, keeps host-generated controls; the sampler gets a reduced egui
+editor with native WAV/FLAC loading as one Classic zone). The WebCLAP
+builds are unaffected everywhere. Note that the reverb's Mod Rate/Depth
+controls exist only in the WebCLAP DSP, so in the native webview UI those
+two sliders are inactive.
 
 ## Plugin IDs
 
@@ -286,6 +304,7 @@ inactive.
 | Z Audio Simple EQ | `dev.zaudio.simple-eq` | `ZAudioSimpleEQ01` | `z-audio-simple-eq.wclap.tar.gz` |
 | Z Audio Formula Piano | `dev.zaudio.formula-piano` | `ZAudioFormulaPno` | `z-audio-formula-piano.wclap.tar.gz` |
 | Z Audio VCSL Piano | `dev.zaudio.vcsl-piano` | `ZAudioVCSLPiano1` | `z-audio-vcsl-piano.wclap.tar.gz` |
+| Z Audio Sampler | `dev.zaudio.sampler` | `ZAudioSamplerMZ1` | `z-audio-sampler.wclap.tar.gz` |
 | Z Audio Formula Drum Set | `dev.zaudio.formula-drums` | `ZAudioDrumSet001` | `z-audio-formula-drums.wclap.tar.gz` |
 | Z Audio Parametric Reverb | `dev.zaudio.parametric-reverb` | `ZAudioParaReverb` | `z-audio-parametric-reverb.wclap.tar.gz` |
 | Z Audio Limiter | `dev.zaudio.limiter` | `ZAudioLimiter000` | `z-audio-limiter.wclap.tar.gz` |
@@ -338,7 +357,8 @@ cargo check --target wasm32-unknown-unknown `
   -p z-audio-webclap-drums `
   -p z-audio-webclap-reverb `
   -p z-audio-webclap-limiter `
-  -p z-audio-webclap-compressor
+  -p z-audio-webclap-compressor `
+  -p z-audio-webclap-sampler
 cargo build --release --target wasm32-unknown-unknown `
   -p z-audio-webclap `
   -p z-audio-webclap-eq `
@@ -346,7 +366,8 @@ cargo build --release --target wasm32-unknown-unknown `
   -p z-audio-webclap-drums `
   -p z-audio-webclap-reverb `
   -p z-audio-webclap-limiter `
-  -p z-audio-webclap-compressor
+  -p z-audio-webclap-compressor `
+  -p z-audio-webclap-sampler
 ```
 
 DSP submodule:
@@ -381,6 +402,7 @@ tar -tf target/webclap/z-audio-formula-drums.wclap.tar.gz
 tar -tf target/webclap/z-audio-parametric-reverb.wclap.tar.gz
 tar -tf target/webclap/z-audio-limiter.wclap.tar.gz
 tar -tf target/webclap/z-audio-compressor.wclap.tar.gz
+tar -tf target/webclap/z-audio-sampler.wclap.tar.gz
 ```
 
 ## Submodule Workflow

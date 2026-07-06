@@ -201,61 +201,75 @@ pub fn encode_status(
     out
 }
 
+// -- UI -> plugin encoders --------------------------------------------------
+//
+// The shipping UI encodes these packets in JS (`ui/main.js`); the Rust
+// encoders exist for this crate's unit tests and for the native plugin's
+// tests, which drive its UI<->audio bridge with real packets.
+
+fn packet(op: u8, body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(MAGIC);
+    out.push(op);
+    out.extend_from_slice(body);
+    out
+}
+
+fn zone_record(z: &ZoneDef) -> [u8; ZONE_RECORD_BYTES] {
+    let mut r = [0u8; ZONE_RECORD_BYTES];
+    r[0] = z.lokey;
+    r[1] = z.hikey;
+    r[2] = z.root;
+    r[3] = if z.one_shot { ZONE_FLAG_ONE_SHOT } else { 0 };
+    r[4] = z.loop_mode;
+    r[8..12].copy_from_slice(&z.start_frame.to_le_bytes());
+    r[12..16].copy_from_slice(&z.end_frame.to_le_bytes());
+    r[16..20].copy_from_slice(&z.loop_start.to_le_bytes());
+    r[20..24].copy_from_slice(&z.loop_end.to_le_bytes());
+    r[24..28].copy_from_slice(&z.gain_db.to_le_bytes());
+    r[28..32].copy_from_slice(&z.tune_cents.to_le_bytes());
+    r[32..36].copy_from_slice(&z.pan.to_le_bytes());
+    r[36..40].copy_from_slice(&z.loop_xfade_s.to_le_bytes());
+    r
+}
+
+pub fn encode_begin(sample_rate: f32, channels: u8, frames: u32) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&sample_rate.to_le_bytes());
+    body.push(channels);
+    body.extend_from_slice(&frames.to_le_bytes());
+    packet(OP_BEGIN_SAMPLE, &body)
+}
+
+pub fn encode_chunk(float_offset: u32, pcm: &[f32]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&float_offset.to_le_bytes());
+    for s in pcm {
+        body.extend_from_slice(&s.to_le_bytes());
+    }
+    packet(OP_SAMPLE_CHUNK, &body)
+}
+
+pub fn encode_commit(zones: &[ZoneDef]) -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&(zones.len() as u16).to_le_bytes());
+    for z in zones {
+        body.extend_from_slice(&zone_record(z));
+    }
+    packet(OP_COMMIT_ZONES, &body)
+}
+
+pub fn encode_note_preview(on: bool, key: u8, velocity: u8) -> Vec<u8> {
+    packet(OP_NOTE_PREVIEW, &[on as u8, key, velocity])
+}
+
+pub fn encode_clear() -> Vec<u8> {
+    packet(OP_CLEAR_SAMPLE, &[])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn packet(op: u8, body: &[u8]) -> Vec<u8> {
-        let mut out = Vec::new();
-        out.extend_from_slice(MAGIC);
-        out.push(op);
-        out.extend_from_slice(body);
-        out
-    }
-
-    fn zone_record(z: &ZoneDef) -> [u8; ZONE_RECORD_BYTES] {
-        let mut r = [0u8; ZONE_RECORD_BYTES];
-        r[0] = z.lokey;
-        r[1] = z.hikey;
-        r[2] = z.root;
-        r[3] = if z.one_shot { ZONE_FLAG_ONE_SHOT } else { 0 };
-        r[4] = z.loop_mode;
-        r[8..12].copy_from_slice(&z.start_frame.to_le_bytes());
-        r[12..16].copy_from_slice(&z.end_frame.to_le_bytes());
-        r[16..20].copy_from_slice(&z.loop_start.to_le_bytes());
-        r[20..24].copy_from_slice(&z.loop_end.to_le_bytes());
-        r[24..28].copy_from_slice(&z.gain_db.to_le_bytes());
-        r[28..32].copy_from_slice(&z.tune_cents.to_le_bytes());
-        r[32..36].copy_from_slice(&z.pan.to_le_bytes());
-        r[36..40].copy_from_slice(&z.loop_xfade_s.to_le_bytes());
-        r
-    }
-
-    pub(crate) fn encode_begin(sample_rate: f32, channels: u8, frames: u32) -> Vec<u8> {
-        let mut body = Vec::new();
-        body.extend_from_slice(&sample_rate.to_le_bytes());
-        body.push(channels);
-        body.extend_from_slice(&frames.to_le_bytes());
-        packet(OP_BEGIN_SAMPLE, &body)
-    }
-
-    pub(crate) fn encode_chunk(float_offset: u32, pcm: &[f32]) -> Vec<u8> {
-        let mut body = Vec::new();
-        body.extend_from_slice(&float_offset.to_le_bytes());
-        for s in pcm {
-            body.extend_from_slice(&s.to_le_bytes());
-        }
-        packet(OP_SAMPLE_CHUNK, &body)
-    }
-
-    pub(crate) fn encode_commit(zones: &[ZoneDef]) -> Vec<u8> {
-        let mut body = Vec::new();
-        body.extend_from_slice(&(zones.len() as u16).to_le_bytes());
-        for z in zones {
-            body.extend_from_slice(&zone_record(z));
-        }
-        packet(OP_COMMIT_ZONES, &body)
-    }
 
     fn test_zone() -> ZoneDef {
         ZoneDef {

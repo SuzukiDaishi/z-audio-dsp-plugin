@@ -29,7 +29,8 @@ fn decode_flac(bytes: &[u8]) -> Result<(f32, u8, Vec<f32>), String> {
     let channels = info.channels as u8;
     let scale = 1.0_f32 / (1_i64 << (info.bits_per_sample - 1)) as f32;
 
-    let mut pcm = Vec::with_capacity((info.samples.unwrap_or(0) as usize) * channels.max(1) as usize);
+    let mut pcm =
+        Vec::with_capacity((info.samples.unwrap_or(0) as usize) * channels.max(1) as usize);
     for sample in reader.samples() {
         let sample = sample.map_err(|e| format!("FLAC decode error: {e}"))?;
         pcm.push(sample as f32 * scale);
@@ -38,8 +39,8 @@ fn decode_flac(bytes: &[u8]) -> Result<(f32, u8, Vec<f32>), String> {
 }
 
 fn decode_wav(bytes: &[u8]) -> Result<(f32, u8, Vec<f32>), String> {
-    let mut reader =
-        hound::WavReader::new(Cursor::new(bytes)).map_err(|e| format!("not a valid WAV stream: {e}"))?;
+    let mut reader = hound::WavReader::new(Cursor::new(bytes))
+        .map_err(|e| format!("not a valid WAV stream: {e}"))?;
     let spec = reader.spec();
     let sample_rate = spec.sample_rate as f32;
     let channels = spec.channels as u8;
