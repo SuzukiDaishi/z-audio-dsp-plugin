@@ -1,0 +1,17 @@
+[package]
+name = "nih_plug_webview"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "ISC"
+description = "Vendored fork of nih-plug-webview: webview (wry) editors for NIH-plug"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
+parking_lot = "0.12.1"
+serde_json = "1.0"
+wry = { version = "0.35.1" }
+baseview = { git = "https://github.com/RustAudio/baseview.git", rev = "9a0b42c09d712777b2edb4c5e0cb6baf21e988f0", features = ["opengl"] }
+raw-window-handle = "0.5"
+crossbeam = "0.8.2"
+keyboard-types = "0.6.2"

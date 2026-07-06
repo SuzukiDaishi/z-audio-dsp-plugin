@@ -169,6 +169,31 @@ impl Plugin for ZAudioReverb {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        // Windows/macOS: reuse the WebCLAP UI inside a wry webview (see
+        // crates/z-audio-webview-editor). Linux hosts can't embed a
+        // webview in the plugin window, so they keep the egui editor.
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let p = &self.params;
+            return z_audio_webview_editor::webview_editor_from_ui!(
+                "../../z-audio-webclap-reverb/ui",
+                (980, 650),
+                vec![
+                    z_audio_webview_editor::map(100, p.mix.as_ptr()),
+                    z_audio_webview_editor::map(101, p.room_size.as_ptr()),
+                    z_audio_webview_editor::map(102, p.decay.as_ptr()),
+                    z_audio_webview_editor::map(103, p.pre_delay.as_ptr()),
+                    z_audio_webview_editor::map(104, p.diffusion.as_ptr()),
+                    z_audio_webview_editor::map(105, p.damping.as_ptr()),
+                    z_audio_webview_editor::map(106, p.low_cut.as_ptr()),
+                    z_audio_webview_editor::map(107, p.high_cut.as_ptr()),
+                    z_audio_webview_editor::map(110, p.width.as_ptr()),
+                    z_audio_webview_editor::map(111, p.early_late.as_ptr()),
+                    z_audio_webview_editor::map(112, p.output_gain.as_ptr())
+                ]
+            );
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         editor::create_reverb_editor(self.params.clone(), self.meters.clone())
     }
 

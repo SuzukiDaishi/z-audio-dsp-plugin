@@ -69,6 +69,21 @@ function decodeParamsSnapshot(ab) {
  * message. Returns `sendSet(id, value)`.
  */
 export function connect({ onSnapshot, onMessage } = {}) {
+  // Native (VST3/CLAP) build: the wry webview injects sendToPlugin /
+  // onPluginMessage (see crates/z-audio-webview-editor). Same UI, JSON
+  // transport instead of WebCLAP binary postMessage.
+  if (typeof window.sendToPlugin === "function") {
+    window.onPluginMessage = (msg) => {
+      if (msg && msg.type === "params" && msg.values && onSnapshot) {
+        onSnapshot(new Map(Object.entries(msg.values).map(([k, v]) => [Number(k), v])));
+        return;
+      }
+      if (onMessage) onMessage(msg);
+    };
+    window.sendToPlugin({ type: "ready" });
+    return (id, value) => window.sendToPlugin({ type: "set", id, value });
+  }
+
   window.addEventListener("message", (event) => {
     if (!(event.data instanceof ArrayBuffer)) return;
     const snapshot = decodeParamsSnapshot(event.data);

@@ -141,6 +141,26 @@ impl Plugin for ZAudioDiffuser {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        // Windows/macOS: reuse the WebCLAP UI inside a wry webview (see
+        // crates/z-audio-webview-editor). Linux hosts can't embed a
+        // webview in the plugin window, so they keep the egui editor.
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let p = &self.params;
+            return z_audio_webview_editor::webview_editor_from_ui!(
+                "../../z-audio-webclap-diffuser/ui",
+                (980, 620),
+                vec![
+                    z_audio_webview_editor::map(220, p.mix.as_ptr()),
+                    z_audio_webview_editor::map(221, p.diffusion.as_ptr()),
+                    z_audio_webview_editor::map(222, p.size.as_ptr()),
+                    z_audio_webview_editor::map(223, p.width.as_ptr()),
+                    z_audio_webview_editor::map(224, p.output_gain.as_ptr()),
+                    z_audio_webview_editor::map(225, p.allpass_count.as_ptr())
+                ]
+            );
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         editor::create_diffuser_editor(self.params.clone(), self.meters.clone())
     }
 

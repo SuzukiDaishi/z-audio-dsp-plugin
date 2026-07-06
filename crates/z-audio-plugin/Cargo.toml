@@ -14,3 +14,6 @@ nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
 z-audio-dsp = { path = "../../thirdparty/z-audio-dsp/crates/z-audio-dsp" }
 z-audio-synth = { path = "../../thirdparty/z-audio-dsp/crates/z-audio-synth" }
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+z-audio-webview-editor = { path = "../z-audio-webview-editor" }

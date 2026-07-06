@@ -57,6 +57,33 @@ impl Plugin for ZAudioSimpleSynth {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        // Windows/macOS: reuse the WebCLAP UI inside a wry webview (see
+        // crates/z-audio-webview-editor). Linux hosts can't embed a
+        // webview in the plugin window, so they keep the egui editor.
+        #[cfg(any(windows, target_os = "macos"))]
+        {
+            let p = &self.params;
+            return z_audio_webview_editor::webview_editor_from_ui!(
+                "../../z-audio-webclap/ui",
+                (1024, 600),
+                vec![
+                    z_audio_webview_editor::map(0, p.master.master_gain.as_ptr()),
+                    z_audio_webview_editor::map(2, p.master.generator_kind.as_ptr()),
+                    z_audio_webview_editor::map(10, p.generator.gain.as_ptr()),
+                    z_audio_webview_editor::map(11, p.generator.pulse_width.as_ptr()),
+                    z_audio_webview_editor::map(20, p.envelope.attack.as_ptr()),
+                    z_audio_webview_editor::map(21, p.envelope.decay.as_ptr()),
+                    z_audio_webview_editor::map(22, p.envelope.sustain.as_ptr()),
+                    z_audio_webview_editor::map(23, p.envelope.release.as_ptr()),
+                    z_audio_webview_editor::map(24, p.envelope.curve.as_ptr()),
+                    z_audio_webview_editor::map(31, p.lfo.waveform.as_ptr()),
+                    z_audio_webview_editor::map(32, p.lfo.rate_hz.as_ptr()),
+                    z_audio_webview_editor::map(33, p.lfo.amount.as_ptr()),
+                    z_audio_webview_editor::map(34, p.lfo.target.as_ptr())
+                ]
+            );
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
         editor::create_synth_editor(self.params.clone())
     }
 

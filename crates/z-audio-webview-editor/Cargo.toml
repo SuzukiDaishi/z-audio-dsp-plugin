@@ -1,0 +1,17 @@
+[package]
+name = "z-audio-webview-editor"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+description = "Webview (wry) editors for the native VST3/CLAP plugins, reusing the WebCLAP ui/ bundles."
+
+[lib]
+name = "z_audio_webview_editor"
+
+[dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
+serde_json = "1.0"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+nih_plug_webview = { path = "../nih-plug-webview" }

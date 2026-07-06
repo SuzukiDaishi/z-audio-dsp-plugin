@@ -253,6 +253,31 @@ The UI <-> plugin binary protocol is documented in
 in host projects yet; the generic `clap.state` blob persists parameters
 only, so reload the file after reopening a project.
 
+## Native VST3/CLAP Webview Editors
+
+On Windows and macOS the native VST3/CLAP builds of the synth, EQ, reverb,
+diffuser, limiter, compressor, and VCSL piano open the *same* web UI as
+their WebCLAP builds, rendered in a [wry](https://github.com/tauri-apps/wry)
+webview (the engine Tauri uses) embedded in the host's plugin window:
+
+- `crates/nih-plug-webview/` — vendored fork (ISC) of
+  [nih-plug-webview](https://github.com/httnn/nih-plug-webview), pinned to
+  this workspace's `nih_plug`/`baseview` revisions (see its `NOTICE.md`).
+- `crates/z-audio-webview-editor/` — inlines each WebCLAP `ui/` bundle
+  into one self-contained HTML page at compile time and bridges the UI's
+  numeric param ids to `nih_plug` `ParamPtr`s over a JSON IPC protocol
+  (`{"type":"set"|"ready"|"params",…}`). The UI kit's `connect()` detects
+  the wry bridge at runtime, so one UI source serves both plugin formats.
+  Host-side automation and preset loads are pushed back to the UI by a
+  per-frame diff of parameter values.
+
+On Linux, wry cannot embed a webview into a host-owned plugin window, so
+the native plugins keep their egui editors (the VCSL piano, which never
+had one, keeps host-generated controls). The WebCLAP builds are unaffected
+everywhere. Note that the reverb's Mod Rate/Depth controls exist only in
+the WebCLAP DSP, so in the native webview UI those two sliders are
+inactive.
+
 ## Plugin IDs
 
 | Plugin | CLAP ID | VST3 Class ID | WebCLAP bundle |
