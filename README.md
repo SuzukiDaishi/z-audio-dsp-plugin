@@ -206,9 +206,19 @@ Modes (chosen in the UI, mapped to a zone table the engine plays as-is):
   root key, with loop modes Off / Forward / Sustain / Ping-Pong / Reverse,
   draggable trim + loop markers, and loop crossfade.
 - **One Shot** — plays through per note and ignores note-off.
-- **Slice** — auto-cut at detected transients (sensitivity control) or an
+- **Slice** — auto-cut at detected onsets (sensitivity control) or an
   equal grid (4/8/16/32), one key per slice from a base key up; markers can
   be added (double-click), removed, and dragged. Up to 128 zones.
+
+Slice-point estimation (`ui/onsets.js`) uses the standard spectral-flux
+recipe rather than a plain level detector: STFT (Hann 1024 / hop 256) →
+log-compressed magnitudes → half-wave-rectified flux → adaptive
+median-plus-floor threshold → peak picking with a minimum inter-onset gap
+→ sample-accurate refinement to the attack start with a declick snap. It
+therefore also catches pitch/timbre changes that have no level dip, scales
+its floor to the trimmed region's strongest hit, and stays quiet on steady
+material. The expensive curve is cached per file, so the sensitivity
+slider re-picks in real time.
 
 Global parameters (automatable): master gain, ADSR, tune, transpose,
 velocity sensitivity, stereo width. A small embedded piano preview bank is
@@ -310,6 +320,7 @@ node --check crates/z-audio-webclap-reverb/ui/main.js
 node --check crates/z-audio-webclap-limiter/ui/main.js
 node --check crates/z-audio-webclap-compressor/ui/main.js
 node --check crates/z-audio-webclap-sampler/ui/main.js
+node --test crates/z-audio-webclap-sampler/ui/onsets.test.mjs
 ```
 
 Packaging smoke checks:

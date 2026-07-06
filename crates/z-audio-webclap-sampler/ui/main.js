@@ -17,6 +17,8 @@
 
 "use strict";
 
+import { computeOnsetCurve, detectSliceMarkers } from "./onsets.js";
+
 // ---------------------------------------------------------------------------
 // Parameters (shared ready/set/params-snapshot protocol with the scaffold).
 // ---------------------------------------------------------------------------
@@ -215,6 +217,7 @@ const state = {
   sliceSensitivity: 0.5,
   sliceBaseKey: 36, // C2
   sliceMarkers: [], // absolute frame positions, sorted, first >= trimStart
+  onsetCurve: null, // cached spectral-flux curve (per file; see onsets.js)
   mappedKeys: new Map(), // key -> {root:boolean} for keyboard display
   pluginStatus: null,
 };
@@ -381,6 +384,7 @@ async function loadFile(file) {
   state.loopStart = 0;
   state.loopEnd = frames;
   state.sliceMarkers = [];
+  state.onsetCurve = null;
 
   fileLabel.textContent = file.name;
   fileLabel.title = file.name;
@@ -446,64 +450,20 @@ function detectSlices() {
     state.sliceMarkers = markers;
     return;
   }
-  state.sliceMarkers = detectTransients(state.mono, state.sampleRate, start, end, state.sliceSensitivity);
-}
-
-// Energy-rise onset detection: hop-sized peak envelope, an onset fires
-// where the envelope jumps well above its recent average. Sensitivity
-// scales both the required jump ratio and the absolute floor.
-function detectTransients(mono, sampleRate, start, end, sensitivity) {
-  const hop = 256;
-  const env = [];
-  for (let i = start; i < end; i += hop) {
-    let peak = 0;
-    const stop = Math.min(i + hop, end);
-    for (let j = i; j < stop; j++) {
-      const a = Math.abs(mono[j]);
-      if (a > peak) peak = a;
-    }
-    env.push(peak);
+  // The STFT onset curve depends only on the audio; computing it once per
+  // file keeps sensitivity-slider drags cheap (re-pick + refine only).
+  if (!state.onsetCurve) {
+    state.onsetCurve = computeOnsetCurve(state.mono, state.sampleRate);
   }
-  const ratio = 4.0 - sensitivity * 2.8; // 4.0 (few) .. 1.2 (many)
-  const floor = 0.09 - sensitivity * 0.075; // 0.09 .. 0.015
-  const minGap = Math.max(1, Math.round((sampleRate * 0.045) / hop)); // 45 ms
-  const markers = [start];
-  let lastOnset = 0;
-  const history = 8;
-  for (let n = 1; n < env.length; n++) {
-    let avg = 0;
-    let count = 0;
-    for (let k = Math.max(0, n - history); k < n; k++) {
-      avg += env[k];
-      count++;
-    }
-    avg = count ? avg / count : 0;
-    if (
-      env[n] > floor &&
-      env[n] > avg * ratio &&
-      n - lastOnset >= minGap &&
-      markers.length < MAX_ZONES
-    ) {
-      markers.push(snapToQuiet(mono, start + n * hop, hop, start));
-      lastOnset = n;
-    }
-  }
-  return [...new Set(markers)].sort((a, b) => a - b);
-}
-
-// Nudge a cut point back to the quietest sample in the preceding hop so
-// slices don't start mid-transient (clicks less, feels like Logic's snap).
-function snapToQuiet(mono, frame, span, lo) {
-  let best = frame;
-  let bestAbs = Infinity;
-  for (let i = Math.max(lo, frame - span); i < Math.min(mono.length, frame + 8); i++) {
-    const a = Math.abs(mono[i]);
-    if (a < bestAbs) {
-      bestAbs = a;
-      best = i;
-    }
-  }
-  return best;
+  state.sliceMarkers = detectSliceMarkers(
+    state.mono,
+    state.sampleRate,
+    start,
+    end,
+    state.sliceSensitivity,
+    state.onsetCurve,
+    MAX_ZONES,
+  );
 }
 
 // ---------------------------------------------------------------------------
