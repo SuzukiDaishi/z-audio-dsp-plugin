@@ -3629,11 +3629,10 @@ dependencies = [
 
 [[package]]
 name = "z-audio-webclap-sampler"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "wclap-plugin",
  "z-audio-dsp",
- "z-audio-synth",
 ]
 
 [[package]]

@@ -8,6 +8,8 @@ This workspace builds native and WebCLAP wrappers for:
 - `Z Audio Simple EQ`: mono/stereo audio input to audio output
 - `Z Audio Formula Piano`: modal/formula piano instrument
 - `Z Audio VCSL Piano`: sampler piano built from VCSL Keys "Grand Piano, K"
+- `Z Audio Sampler`: multi-zone WebCLAP sampler with GUI file loading and
+  auto-slicing (see below)
 - `Z Audio Formula Drum Set`: modal/formula GM drum set instrument
 - `Z Audio Parametric Reverb`: stereo FDN reverb effect
 - `Z Audio Limiter`: stereo lookahead limiter effect
@@ -189,6 +191,36 @@ ui/styles.css
 The piano and drum WebCLAP bundles currently expose host parameters without a
 custom WebCLAP UI, so their tarballs contain `module.wasm` and `plugin.json`.
 
+## Z Audio Sampler (WebCLAP)
+
+`z-audio-webclap-sampler` is a Logic Quick Sampler-style instrument: load an
+audio file from the plugin GUI, and it is decoded in the WebView with
+`decodeAudioData`, streamed to the wasm plugin in 128 KiB binary chunks over
+`clap.webview/3`, and cut into key-mapped zones. All heavy work (decode,
+upload assembly, zone cutting) happens outside `process()`; the audio path
+only reads prepared `SampleRegion`s.
+
+Modes (chosen in the UI, mapped to a zone table the engine plays as-is):
+
+- **Classic** — the whole (trimmed) sample mapped chromatically around a
+  root key, with loop modes Off / Forward / Sustain / Ping-Pong / Reverse,
+  draggable trim + loop markers, and loop crossfade.
+- **One Shot** — plays through per note and ignores note-off.
+- **Slice** — auto-cut at detected transients (sensitivity control) or an
+  equal grid (4/8/16/32), one key per slice from a base key up; markers can
+  be added (double-click), removed, and dragged. Up to 128 zones.
+
+Global parameters (automatable): master gain, ADSR, tune, transpose,
+velocity sensitivity, stereo width. A small embedded piano preview bank is
+mapped as one Classic zone at startup, so the instrument makes sound before
+any file is loaded. Samples up to 60 seconds (stereo, source rate preserved
+as metadata) are accepted; longer files are truncated by the UI.
+
+The UI <-> plugin binary protocol is documented in
+`crates/z-audio-webclap-sampler/src/protocol.rs`. Sample PCM is not stored
+in host projects yet; the generic `clap.state` blob persists parameters
+only, so reload the file after reopening a project.
+
 ## Plugin IDs
 
 | Plugin | CLAP ID | VST3 Class ID | WebCLAP bundle |
@@ -277,6 +309,7 @@ node --check crates/z-audio-webclap-eq/ui/main.js
 node --check crates/z-audio-webclap-reverb/ui/main.js
 node --check crates/z-audio-webclap-limiter/ui/main.js
 node --check crates/z-audio-webclap-compressor/ui/main.js
+node --check crates/z-audio-webclap-sampler/ui/main.js
 ```
 
 Packaging smoke checks:
