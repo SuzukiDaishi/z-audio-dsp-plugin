@@ -50,7 +50,10 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 // info, plugin struct, etc.).
 // ---------------------------------------------------------------------------
 
-#[no_mangle]
+// Only exported on wasm32: on native targets a `#[no_mangle] malloc`
+// would shadow libc's allocator and crash anything (like the test
+// harness) that calls the real malloc expecting libc semantics.
+#[cfg_attr(target_arch = "wasm32", no_mangle)]
 pub extern "C" fn malloc(size: u32) -> u32 {
     use alloc::alloc::{alloc, Layout};
     if size == 0 {
@@ -310,6 +313,36 @@ pub trait Plugin: Sized + 'static {
     fn latency_samples(&self) -> u32 {
         0
     }
+
+    /// Raw bytes from the plugin's UI iframe via `clap.webview/3` receive,
+    /// for plugins with a richer UI protocol than `{set:[id,value]}` (e.g.
+    /// sample uploads). Called for every message the built-in `ready`/`set`
+    /// parsers didn't consume, and additionally for the `ready` handshake
+    /// itself (after the automatic params snapshot reply) so the plugin can
+    /// push its own extra state to a freshly opened UI. Return `true` if the
+    /// message was handled. WCLAP is single-threaded, so this runs between
+    /// audio blocks — keep per-message work bounded. Reply with
+    /// [`send_to_ui`]. Default: ignore everything.
+    fn on_ui_message(&mut self, _bytes: &[u8]) -> bool {
+        false
+    }
+}
+
+/// Push bytes to the plugin's UI iframe via `clap_host_webview.send`.
+/// No-op if the host didn't expose `clap.webview/3` (or before init).
+/// Callable from anywhere in the plugin — `process`, `set_param`,
+/// [`Plugin::on_ui_message`] — since WCLAP is single-threaded.
+pub fn send_to_ui(bytes: &[u8]) {
+    unsafe {
+        let host = DEF.host_ptr;
+        let send_idx = DEF.host_webview_send;
+        if host == 0 || send_idx == 0 || bytes.is_empty() {
+            return;
+        }
+        type Send = extern "C" fn(host: u32, buf: u32, size: u32) -> u32;
+        let f: Send = core::mem::transmute(send_idx as usize);
+        f(host, bytes.as_ptr() as u32, bytes.len() as u32);
+    }
 }
 
 /// NOTE_ON vs. NOTE_OFF, as read from a `clap_event_note`'s header `type`.
@@ -481,16 +514,7 @@ impl ProcessCtx {
     /// Typical use: encode a `{params:{<id>:<f64>, …}}` CBOR snapshot
     /// with current peak / GR / readonly param values and push at ~30 Hz.
     pub fn send_to_ui(&self, bytes: &[u8]) {
-        unsafe {
-            let host = DEF.host_ptr;
-            let send_idx = DEF.host_webview_send;
-            if host == 0 || send_idx == 0 || bytes.is_empty() {
-                return;
-            }
-            type Send = extern "C" fn(host: u32, buf: u32, size: u32) -> u32;
-            let f: Send = core::mem::transmute(send_idx as usize);
-            f(host, bytes.as_ptr() as u32, bytes.len() as u32);
-        }
+        send_to_ui(bytes);
     }
 }
 
@@ -715,6 +739,7 @@ struct VTable {
     get_param: Option<fn(*mut (), u32) -> f64>,
     set_param: Option<fn(*mut (), u32, f64)>,
     latency_samples: Option<fn(*mut ()) -> u32>,
+    on_ui_message: Option<fn(*mut (), *const u8, usize) -> bool>,
 }
 
 static mut VTABLE: VTable = VTable {
@@ -729,6 +754,7 @@ static mut VTABLE: VTable = VTable {
     get_param: None,
     set_param: None,
     latency_samples: None,
+    on_ui_message: None,
 };
 
 // `clap_entry` itself is declared above as the actual ClapEntry struct;
@@ -798,6 +824,7 @@ pub fn init_plugin<P: Plugin>(def: &'static PluginDef) {
         VTABLE.get_param = Some(thunk_get_param::<P>);
         VTABLE.set_param = Some(thunk_set_param::<P>);
         VTABLE.latency_samples = Some(thunk_latency_samples::<P>);
+        VTABLE.on_ui_message = Some(thunk_on_ui_message::<P>);
 
         // clap.latency is unconditionally exposed; plugins that don't
         // override `latency_samples()` simply report 0.
@@ -875,6 +902,10 @@ fn thunk_set_param<P: Plugin>(p: *mut (), id: u32, value: f64) {
 
 fn thunk_latency_samples<P: Plugin>(p: *mut ()) -> u32 {
     unsafe { (*(p as *const P)).latency_samples() }
+}
+
+fn thunk_on_ui_message<P: Plugin>(p: *mut (), ptr: *const u8, len: usize) -> bool {
+    unsafe { (*(p as *mut P)).on_ui_message(core::slice::from_raw_parts(ptr, len)) }
 }
 
 // ---------------------------------------------------------------------------
@@ -1476,7 +1507,9 @@ extern "C" fn webview_receive(plugin_ptr: u32, buf_ptr: u32, size: u32) -> u32 {
     // defaults. Reply with a full param snapshot ({params:{id:value}})
     // so it reflects the plugin's ACTUAL state (possibly restored from
     // the project via clap.state). The widget transport's
-    // decodeParamsSnapshot consumes exactly this shape.
+    // decodeParamsSnapshot consumes exactly this shape. The plugin's own
+    // `on_ui_message` also sees "ready" so it can push extra state (e.g.
+    // a sample-status message) to the freshly opened UI.
     if size == 6 {
         unsafe {
             if *p == 0x65
@@ -1487,35 +1520,31 @@ extern "C" fn webview_receive(plugin_ptr: u32, buf_ptr: u32, size: u32) -> u32 {
                 && *p.add(5) == b'y'
             {
                 push_params_snapshot(plugin_ptr);
+                dispatch_ui_message(plugin_ptr, p, size as usize);
                 return 1;
             }
         }
     }
-    if size < 20 {
+    let is_set_shape = size >= 20
+        && unsafe {
+            // 0xa1 = map(1), text(3) "set", array(2), u32, f64
+            *p == 0xa1
+                && *p.add(1) == 0x63
+                && *p.add(2) == b's'
+                && *p.add(3) == b'e'
+                && *p.add(4) == b't'
+                && *p.add(5) == 0x82
+                && *p.add(6) == 0x1a
+                && *p.add(11) == 0xfb
+        };
+    if !is_set_shape {
+        // Anything that isn't the built-in ready/set protocol belongs to
+        // the plugin's own UI message handler (if it has one).
+        dispatch_ui_message(plugin_ptr, p, size as usize);
         return 1;
     }
     unsafe {
-        // 0xa1 = map(1)
-        if *p != 0xa1 {
-            return 1;
-        }
-        // 0x63 "set"
-        if *p.add(1) != 0x63 || *p.add(2) != 0x73 || *p.add(3) != 0x65 || *p.add(4) != 0x74 {
-            return 1;
-        }
-        // 0x82 = array(2)
-        if *p.add(5) != 0x82 {
-            return 1;
-        }
-        // 0x1a = u32; then 4 big-endian bytes
-        if *p.add(6) != 0x1a {
-            return 1;
-        }
         let id = u32::from_be_bytes([*p.add(7), *p.add(8), *p.add(9), *p.add(10)]);
-        // 0xfb = f64; then 8 big-endian bytes
-        if *p.add(11) != 0xfb {
-            return 1;
-        }
         let mut vbytes = [0u8; 8];
         for i in 0..8 {
             vbytes[i] = *p.add(12 + i);
@@ -1528,6 +1557,18 @@ extern "C" fn webview_receive(plugin_ptr: u32, buf_ptr: u32, size: u32) -> u32 {
         }
     }
     1
+}
+
+/// Forwards a webview message to `Plugin::on_ui_message`, if the plugin
+/// installed one.
+fn dispatch_ui_message(plugin_ptr: u32, p: *const u8, len: usize) {
+    unsafe {
+        if let Some(f) = VTABLE.on_ui_message {
+            if !p.is_null() && len > 0 {
+                f(read_plugin_data(plugin_ptr), p, len);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
