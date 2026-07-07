@@ -5042,6 +5042,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-webclap-wavetable"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+ "z-audio-dsp",
+]
+
+[[package]]
 name = "z-audio-webview-editor"
 version = "0.1.0"
 dependencies = [

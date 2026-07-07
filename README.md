@@ -11,6 +11,9 @@ This workspace builds native and WebCLAP wrappers for:
 - `Z Audio Sampler`: multi-zone sampler with GUI file loading and
   auto-slicing, as WebCLAP and native VST3/CLAP (see below)
 - `Z Audio Formula Drum Set`: modal/formula GM drum set instrument
+- `Z Audio Wave Synth`: Serum-inspired wavetable synth (2 morphing
+  oscillators with unison, SVF filter, 2 envelopes, 2 LFOs, mod matrix),
+  WebCLAP only for now
 - `Z Audio Parametric Reverb`: stereo FDN reverb effect
 - `Z Audio Limiter`: stereo lookahead limiter effect
 - `Z Audio Compressor`: stereo feed-forward compressor effect
@@ -154,6 +157,8 @@ target/webclap/z-audio-formula-piano.wclap/
 target/webclap/z-audio-formula-piano.wclap.tar.gz
 target/webclap/z-audio-vcsl-piano.wclap/
 target/webclap/z-audio-vcsl-piano.wclap.tar.gz
+target/webclap/z-audio-wavetable.wclap/
+target/webclap/z-audio-wavetable.wclap.tar.gz
 target/webclap/z-audio-formula-drums.wclap/
 target/webclap/z-audio-formula-drums.wclap.tar.gz
 target/webclap/z-audio-parametric-reverb.wclap/
@@ -212,6 +217,15 @@ plugin-specific visualization front and center:
   drag to reshape size/diffusion.
 - **VCSL Piano** — a draggable velocity→loudness response curve.
 - **Sampler** — see the sampler section above.
+- **Wave Synth** — Serum-style panels built from rotary knobs (vertical
+  drag, Shift = fine, wheel, double-click = default) and directly
+  editable canvases: each oscillator draws a pseudo-3D stack of its
+  table's frames with the live morphed cycle riding at the current WT
+  position (drag the canvas to morph), the filter response is draggable
+  (cutoff/resonance, wheel = reso), the ADSR curves have three grab
+  handles, and a preview keyboard at the bottom plays the synth without
+  a MIDI device. Waveforms and meters are pushed from the plugin, so
+  the canvases show exactly what the DSP plays.
 
 The piano and drum WebCLAP bundles currently expose host parameters without a
 custom WebCLAP UI, so their tarballs contain `module.wasm` and `plugin.json`.
@@ -306,6 +320,7 @@ two sliders are inactive.
 | Z Audio VCSL Piano | `dev.zaudio.vcsl-piano` | `ZAudioVCSLPiano1` | `z-audio-vcsl-piano.wclap.tar.gz` |
 | Z Audio Sampler | `dev.zaudio.sampler` | `ZAudioSamplerMZ1` | `z-audio-sampler.wclap.tar.gz` |
 | Z Audio Formula Drum Set | `dev.zaudio.formula-drums` | `ZAudioDrumSet001` | `z-audio-formula-drums.wclap.tar.gz` |
+| Z Audio Wave Synth | `dev.zaudio.wavetable` | — (WebCLAP only) | `z-audio-wavetable.wclap.tar.gz` |
 | Z Audio Parametric Reverb | `dev.zaudio.parametric-reverb` | `ZAudioParaReverb` | `z-audio-parametric-reverb.wclap.tar.gz` |
 | Z Audio Limiter | `dev.zaudio.limiter` | `ZAudioLimiter000` | `z-audio-limiter.wclap.tar.gz` |
 | Z Audio Compressor | `dev.zaudio.compressor` | `ZAudioCompressor` | `z-audio-compressor.wclap.tar.gz` |
@@ -323,6 +338,30 @@ The synth WebCLAP UI intentionally exposes only the main instrument controls:
 
 Lower-level synth parameters such as pan, phase, and internal EQ routing still
 exist in the DSP/API layer, but they are not shown in the WebCLAP synth UI.
+
+### Wave Synth
+
+`z-audio-webclap-wavetable` is a Serum-inspired wavetable synth (WebCLAP
+only for now; the crate builds as an rlib so a native VST3/CLAP wrapper
+can reuse the engine later). Web param ids are the 500 block:
+
+- Oscillators A/B: enable, factory table (Basic Shapes / PWM / Harmonic
+  Sweep / Metal Bell), wavetable position (frame morph), octave/semi/fine,
+  unison 1-8 with detune + blend, start phase, random phase, pan, level
+- Filter: LP12/LP24/HP12/BP12 state-variable filter with cutoff,
+  resonance, drive, key tracking, dry/wet mix, and per-oscillator routing
+- Env 1 (amp) and Env 2: ADSR plus a shared curve control
+- LFO 1/2: sine/tri/saw/square/S&H, 0.01-20 Hz, start phase, retrigger
+- Mod matrix: 8 slots of source (Env 2, LFO 1/2, velocity, note) →
+  destination (WT pos / pitch / level / pan per osc, cutoff, resonance,
+  master) → bipolar amount; every slot field is host-automatable
+- Global: master, polyphony (1-16), pitch-bend range (declared; WebCLAP
+  hosts don't deliver bend events yet), glide
+
+Wavetables are generated at activation by additive synthesis into 11
+band-limited mip levels per frame (harmonics halve per level), and the
+oscillator picks the mip whose full band stays below Nyquist for the
+current pitch — wavetable playback stays alias-free across the key range.
 
 ### EQ
 
@@ -358,7 +397,8 @@ cargo check --target wasm32-unknown-unknown `
   -p z-audio-webclap-reverb `
   -p z-audio-webclap-limiter `
   -p z-audio-webclap-compressor `
-  -p z-audio-webclap-sampler
+  -p z-audio-webclap-sampler `
+  -p z-audio-webclap-wavetable
 cargo build --release --target wasm32-unknown-unknown `
   -p z-audio-webclap `
   -p z-audio-webclap-eq `
@@ -367,7 +407,8 @@ cargo build --release --target wasm32-unknown-unknown `
   -p z-audio-webclap-reverb `
   -p z-audio-webclap-limiter `
   -p z-audio-webclap-compressor `
-  -p z-audio-webclap-sampler
+  -p z-audio-webclap-sampler `
+  -p z-audio-webclap-wavetable
 ```
 
 DSP submodule:
@@ -388,6 +429,7 @@ node --check crates/z-audio-webclap-reverb/ui/main.js
 node --check crates/z-audio-webclap-limiter/ui/main.js
 node --check crates/z-audio-webclap-compressor/ui/main.js
 node --check crates/z-audio-webclap-sampler/ui/main.js
+node --check crates/z-audio-webclap-wavetable/ui/main.js
 node --test crates/z-audio-webclap-sampler/ui/onsets.test.mjs
 ```
 
@@ -403,6 +445,7 @@ tar -tf target/webclap/z-audio-parametric-reverb.wclap.tar.gz
 tar -tf target/webclap/z-audio-limiter.wclap.tar.gz
 tar -tf target/webclap/z-audio-compressor.wclap.tar.gz
 tar -tf target/webclap/z-audio-sampler.wclap.tar.gz
+tar -tf target/webclap/z-audio-wavetable.wclap.tar.gz
 ```
 
 ## Submodule Workflow

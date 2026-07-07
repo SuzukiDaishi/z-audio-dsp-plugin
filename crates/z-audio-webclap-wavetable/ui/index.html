@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" style="--accent: #a3e04a; --accent-soft: rgba(163, 224, 74, 0.16)">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z Audio Wave Synth</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>WAVE</h1>
+          <p class="eyebrow">Z AUDIO · WAVETABLE SYNTH</p>
+        </div>
+        <div class="header-right">
+          <span class="header-note" id="voice-note">0 voices</span>
+          <div class="header-master" id="master-mount"></div>
+          <span id="status">Waiting for host</span>
+        </div>
+      </header>
+
+      <div class="synth-body">
+        <div class="panels cols-3 top-row">
+          <section class="section osc-panel" id="sec-osc-a">
+            <div class="panel-head">
+              <h2 class="section-title">OSC A</h2>
+              <div class="table-picker" id="osc-a-table"></div>
+              <span class="head-toggle" id="osc-a-enable"></span>
+            </div>
+            <div class="viz wave-viz">
+              <canvas id="viz-osc-a"></canvas>
+            </div>
+            <div class="knob-grid cols-6" id="osc-a-knobs"></div>
+          </section>
+
+          <section class="section osc-panel" id="sec-osc-b">
+            <div class="panel-head">
+              <h2 class="section-title">OSC B</h2>
+              <div class="table-picker" id="osc-b-table"></div>
+              <span class="head-toggle" id="osc-b-enable"></span>
+            </div>
+            <div class="viz wave-viz">
+              <canvas id="viz-osc-b"></canvas>
+            </div>
+            <div class="knob-grid cols-6" id="osc-b-knobs"></div>
+          </section>
+
+          <section class="section" id="sec-filter">
+            <div class="panel-head">
+              <h2 class="section-title">Filter</h2>
+              <div id="filter-type"></div>
+              <span class="head-toggle" id="filter-enable"></span>
+            </div>
+            <div class="viz filter-viz">
+              <canvas id="viz-filter"></canvas>
+            </div>
+            <div class="knob-grid cols-5" id="filter-knobs"></div>
+            <div class="route-row">
+              <span class="route-item" id="route-a"></span>
+              <span class="route-item" id="route-b"></span>
+            </div>
+          </section>
+        </div>
+
+        <div class="panels cols-4 mid-row">
+          <section class="section">
+            <div class="panel-head">
+              <h2 class="section-title">Env 1 · Amp</h2>
+            </div>
+            <div class="viz env-viz">
+              <canvas id="viz-env1"></canvas>
+            </div>
+            <div class="knob-grid cols-5" id="env1-knobs"></div>
+          </section>
+          <section class="section">
+            <div class="panel-head">
+              <h2 class="section-title">Env 2</h2>
+            </div>
+            <div class="viz env-viz">
+              <canvas id="viz-env2"></canvas>
+            </div>
+            <div class="knob-grid cols-5" id="env2-knobs"></div>
+          </section>
+          <section class="section">
+            <div class="panel-head">
+              <h2 class="section-title">LFO 1</h2>
+              <span class="head-toggle" id="lfo1-retrig"></span>
+            </div>
+            <div class="viz lfo-viz">
+              <canvas id="viz-lfo1"></canvas>
+            </div>
+            <div class="lfo-controls">
+              <div id="lfo1-wave"></div>
+              <div class="knob-grid cols-2" id="lfo1-knobs"></div>
+            </div>
+          </section>
+          <section class="section">
+            <div class="panel-head">
+              <h2 class="section-title">LFO 2</h2>
+              <span class="head-toggle" id="lfo2-retrig"></span>
+            </div>
+            <div class="viz lfo-viz">
+              <canvas id="viz-lfo2"></canvas>
+            </div>
+            <div class="lfo-controls">
+              <div id="lfo2-wave"></div>
+              <div class="knob-grid cols-2" id="lfo2-knobs"></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="bottom-row">
+          <section class="section">
+            <div class="panel-head">
+              <h2 class="section-title">Mod Matrix</h2>
+            </div>
+            <div id="matrix"></div>
+          </section>
+          <section class="section">
+            <div class="panel-head">
+              <h2 class="section-title">Global</h2>
+            </div>
+            <div class="knob-grid cols-3" id="global-knobs"></div>
+          </section>
+        </div>
+
+        <div class="keys-wrap">
+          <div id="keyboard" class="keyboard" title="Click / drag to preview notes"></div>
+        </div>
+      </div>
+    </main>
+    <div id="tooltip" class="tooltip" hidden></div>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

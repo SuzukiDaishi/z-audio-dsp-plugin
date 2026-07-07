@@ -18,6 +18,7 @@ members = [
     "crates/z-audio-webclap-vcsl-piano",
     "crates/z-audio-webclap-sampler",
     "crates/z-audio-webclap-granular",
+    "crates/z-audio-webclap-wavetable",
     "crates/z-audio-webclap-drums",
     "crates/z-audio-webclap-reverb",
     "crates/z-audio-webclap-diffuser",

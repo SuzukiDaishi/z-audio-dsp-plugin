@@ -1,0 +1,41 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.wavetable",
+  "name": "Z Audio Wave Synth",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Serum-inspired wavetable synthesizer: two morphing wavetable oscillators with unison, a per-voice state-variable filter, two envelopes, two LFOs, and an 8-slot modulation matrix.",
+  "features": [
+    "instrument",
+    "synthesizer",
+    "stereo"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_wavetable.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": {
+      "width": 940,
+      "height": 850
+    },
+    "expanded_size": {
+      "width": 1120,
+      "height": 940
+    }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.wavetable",
+      "name": "Z Audio Wave Synth",
+      "features": [
+        "instrument",
+        "synthesizer",
+        "stereo"
+      ],
+      "has_ui": true
+    }
+  ]
+}
