@@ -24,3 +24,6 @@ name = "Z Audio Compressor"
 
 [z-audio-sampler-plugin]
 name = "Z Audio Sampler"
+
+[z-audio-granular-plugin]
+name = "Z Audio Granular"

@@ -48,6 +48,12 @@ const WEBCLAP_BUNDLES: &[WebClapBundle] = &[
         wasm_file: "z_audio_webclap_sampler.wasm",
     },
     WebClapBundle {
+        package: "z-audio-webclap-granular",
+        bundle_name: "z-audio-granular.wclap",
+        crate_dir: "crates/z-audio-webclap-granular",
+        wasm_file: "z_audio_webclap_granular.wasm",
+    },
+    WebClapBundle {
         package: "z-audio-webclap-drums",
         bundle_name: "z-audio-formula-drums.wclap",
         crate_dir: "crates/z-audio-webclap-drums",

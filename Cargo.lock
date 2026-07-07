@@ -4867,6 +4867,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-granular-plugin"
+version = "0.1.0"
+dependencies = [
+ "claxon",
+ "hound",
+ "nih_plug",
+ "nih_plug_egui",
+ "rfd",
+ "z-audio-webclap-granular",
+ "z-audio-webview-editor",
+]
+
+[[package]]
 name = "z-audio-limiter-plugin"
 version = "0.1.0"
 dependencies = [
@@ -4972,6 +4985,14 @@ dependencies = [
 
 [[package]]
 name = "z-audio-webclap-eq"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+ "z-audio-dsp",
+]
+
+[[package]]
+name = "z-audio-webclap-granular"
 version = "0.1.0"
 dependencies = [
  "wclap-plugin",

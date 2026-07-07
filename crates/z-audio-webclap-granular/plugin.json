@@ -1,0 +1,43 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.granular",
+  "name": "Z Audio Granular",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Granular synthesizer: load audio in the UI, automate the play position, and grains bloom around it. Modeled on Phase Plant's granular generator.",
+  "features": [
+    "instrument",
+    "synthesizer",
+    "granular",
+    "stereo"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_granular.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": {
+      "width": 640,
+      "height": 700
+    },
+    "expanded_size": {
+      "width": 820,
+      "height": 780
+    }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.granular",
+      "name": "Z Audio Granular",
+      "features": [
+        "instrument",
+        "synthesizer",
+        "granular",
+        "stereo"
+      ],
+      "has_ui": true
+    }
+  ]
+}
