@@ -686,8 +686,19 @@ impl SynthEngine {
     }
 
     /// Fill `out` with the morphed single-cycle waveform of one oscillator
-    /// (for the UI preview). Uses a mid mip so the preview stays smooth.
+    /// at its current WT position (for the UI preview).
     pub fn preview_wave(&self, osc_b: bool, out: &mut [f32]) {
+        let pos = if osc_b {
+            self.params.osc_b.wt_pos
+        } else {
+            self.params.osc_a.wt_pos
+        };
+        self.preview_wave_at(osc_b, pos, out);
+    }
+
+    /// Fill `out` with one oscillator's single cycle at an arbitrary WT
+    /// position — the UI's pseudo-3D stack view samples every frame.
+    pub fn preview_wave_at(&self, osc_b: bool, pos: f32, out: &mut [f32]) {
         let p = if osc_b {
             &self.params.osc_b
         } else {
@@ -696,7 +707,7 @@ impl SynthEngine {
         let table = self.tables.table(p.table as usize);
         let n = out.len().max(1);
         for (i, v) in out.iter_mut().enumerate() {
-            *v = table.sample(i as f32 / n as f32, p.wt_pos, 0, 0.0);
+            *v = table.sample(i as f32 / n as f32, pos, 0, 0.0);
         }
     }
 

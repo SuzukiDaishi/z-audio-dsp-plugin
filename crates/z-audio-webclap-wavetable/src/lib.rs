@@ -25,7 +25,9 @@ use std::sync::OnceLock;
 
 use engine::{EnvParams, LfoParams, OscParams, SynthEngine, SynthParams};
 use params::*;
-use protocol::{encode_meter, encode_wave, PREVIEW_LEN};
+use protocol::{
+    encode_meter, encode_stack, encode_wave, parse_note_preview, PREVIEW_LEN, STACK_FRAME_LEN,
+};
 use wclap_plugin::{
     init_plugin, send_to_ui, silence, NoteEventKind, ParamDef, Plugin, PluginDef, ProcessCtx,
     ProcessStatus,
@@ -271,6 +273,8 @@ struct ZAudioWebWavetable {
     meter_countdown: usize,
     /// Waveform previews resend when these change (table, wt_pos ×2).
     last_preview_key: (u8, u32, u8, u32),
+    /// Stack packets resend when a table selection changes.
+    last_stack_key: (u8, u8),
     sample_rate: f32,
 }
 
@@ -293,6 +297,22 @@ impl ZAudioWebWavetable {
         self.last_preview_key = Self::preview_key(self.engine.params());
     }
 
+    /// Every frame of both oscillators' tables, for the 3D stack view.
+    fn push_stacks(&mut self) {
+        for osc_b in [false, true] {
+            let mut frames = Vec::with_capacity(wavetable::FRAMES);
+            for f in 0..wavetable::FRAMES {
+                let mut buf = vec![0.0f32; STACK_FRAME_LEN];
+                let pos = f as f32 / (wavetable::FRAMES - 1) as f32;
+                self.engine.preview_wave_at(osc_b, pos, &mut buf);
+                frames.push(buf);
+            }
+            send_to_ui(&encode_stack(osc_b, &frames));
+        }
+        let p = self.engine.params();
+        self.last_stack_key = (p.osc_a.table, p.osc_b.table);
+    }
+
     fn push_meter(&mut self) {
         let (env1, env2, lfo1, lfo2) = self.engine.meter();
         let voices = self.engine.active_voices().min(255) as u8;
@@ -310,6 +330,7 @@ impl Plugin for ZAudioWebWavetable {
             ui_seen: false,
             meter_countdown: 0,
             last_preview_key: (255, 0, 255, 0),
+            last_stack_key: (255, 255),
             sample_rate: 48_000.0,
         }
     }
@@ -349,7 +370,18 @@ impl Plugin for ZAudioWebWavetable {
             // UI (re)opened: after the scaffold's automatic params
             // snapshot, seed its oscillator canvases.
             self.ui_seen = true;
+            self.push_stacks();
             self.push_previews();
+            return true;
+        }
+        if let Some((on, key, velocity)) = parse_note_preview(bytes) {
+            // Preview keyboard in the UI, same idea as the granular
+            // synth's NotePreview op.
+            if on {
+                self.engine.note_on(key, velocity as f32 / 127.0);
+            } else {
+                self.engine.note_off(key);
+            }
             return true;
         }
         false
@@ -413,6 +445,10 @@ impl Plugin for ZAudioWebWavetable {
             if self.meter_countdown == 0 {
                 self.meter_countdown = (self.sample_rate / 30.0) as usize;
                 self.push_meter();
+                let p = self.engine.params();
+                if (p.osc_a.table, p.osc_b.table) != self.last_stack_key {
+                    self.push_stacks();
+                }
                 if Self::preview_key(self.engine.params()) != self.last_preview_key {
                     self.push_previews();
                 }

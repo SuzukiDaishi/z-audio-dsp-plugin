@@ -18,12 +18,12 @@
   "has_ui": true,
   "ui": {
     "compact_size": {
-      "width": 920,
-      "height": 780
+      "width": 940,
+      "height": 850
     },
     "expanded_size": {
-      "width": 1080,
-      "height": 860
+      "width": 1120,
+      "height": 940
     }
   },
   "plugins": [

@@ -217,11 +217,15 @@ plugin-specific visualization front and center:
   drag to reshape size/diffusion.
 - **VCSL Piano** — a draggable velocity→loudness response curve.
 - **Sampler** — see the sampler section above.
-- **Wave Synth** — Serum-style panels: each oscillator draws its live
-  morphed single-cycle waveform (pushed from the plugin, so the canvas
-  shows exactly what the DSP plays), the filter plots its exact SVF
-  response, and the envelope/LFO scopes carry live level/phase markers
-  fed by a ~30 Hz meter packet.
+- **Wave Synth** — Serum-style panels built from rotary knobs (vertical
+  drag, Shift = fine, wheel, double-click = default) and directly
+  editable canvases: each oscillator draws a pseudo-3D stack of its
+  table's frames with the live morphed cycle riding at the current WT
+  position (drag the canvas to morph), the filter response is draggable
+  (cutoff/resonance, wheel = reso), the ADSR curves have three grab
+  handles, and a preview keyboard at the bottom plays the synth without
+  a MIDI device. Waveforms and meters are pushed from the plugin, so
+  the canvases show exactly what the DSP plays.
 
 The piano and drum WebCLAP bundles currently expose host parameters without a
 custom WebCLAP UI, so their tarballs contain `module.wasm` and `plugin.json`.

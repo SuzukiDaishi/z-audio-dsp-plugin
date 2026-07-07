@@ -350,3 +350,462 @@ main {
 .viz-row.cols-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
+
+/* ==========================================================================
+ * Wave Synth — plugin-specific styles on top of the shared design system.
+ * ========================================================================== */
+
+main {
+  grid-template-rows: 44px minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.synth-body {
+  align-content: start;
+  display: grid;
+  gap: 8px;
+  /* auto rows compress below content height when space is tight;
+     max-content keeps panels whole and lets this container scroll. */
+  grid-auto-rows: max-content;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.section {
+  gap: 6px;
+  padding: 8px 10px 9px;
+}
+
+/* -- panel heads ---------------------------------------------------------- */
+
+.panel-head {
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  min-height: 24px;
+  padding-bottom: 5px;
+}
+
+.panel-head .section-title {
+  color: color-mix(in srgb, var(--accent) 70%, var(--text-dim));
+  margin: 0;
+}
+
+.head-toggle {
+  display: inline-flex;
+}
+
+/* -- switches (compact toggles) ------------------------------------------- */
+
+.switch {
+  align-items: center;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.switch .switch-label {
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.switch .pill {
+  background: #0c1218;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  height: 14px;
+  position: relative;
+  transition: background 0.12s ease, border-color 0.12s ease;
+  width: 26px;
+}
+
+.switch .pill::after {
+  background: var(--text-dim);
+  border-radius: 50%;
+  content: "";
+  height: 8px;
+  left: 3px;
+  position: absolute;
+  top: 2px;
+  transition: left 0.12s ease, background 0.12s ease;
+  width: 8px;
+}
+
+.switch.on .pill {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.switch.on .pill::after {
+  background: var(--accent);
+  left: 14px;
+}
+
+/* -- table picker ---------------------------------------------------------- */
+
+.table-picker {
+  align-items: center;
+  display: flex;
+  flex: 1;
+  gap: 4px;
+  justify-content: center;
+  min-width: 0;
+}
+
+.table-picker button {
+  background: #0c1218;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text-mid);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.table-picker button:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  color: color-mix(in srgb, var(--accent) 70%, #fff);
+}
+
+.table-picker .table-name {
+  color: color-mix(in srgb, var(--accent) 75%, #dfe9d8);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  max-width: 130px;
+  overflow: hidden;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* -- knobs ------------------------------------------------------------------ */
+
+.knob-grid {
+  display: grid;
+  gap: 4px 2px;
+  justify-items: center;
+}
+
+.knob-grid.cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.knob-grid.cols-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.knob-grid.cols-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.knob-grid.cols-6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.knob {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  touch-action: none;
+  user-select: none;
+}
+
+.knob canvas {
+  cursor: ns-resize;
+  display: block;
+  height: 44px;
+  width: 44px;
+}
+
+.knob.small canvas {
+  height: 38px;
+  width: 38px;
+}
+
+.knob .knob-label {
+  color: var(--text-dim);
+  font-size: 8px;
+  letter-spacing: 0.09em;
+  text-align: center;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.knob:hover .knob-label,
+.knob.dragging .knob-label {
+  color: color-mix(in srgb, var(--accent) 70%, #fff);
+}
+
+.header-master {
+  display: flex;
+}
+
+.header-master .knob canvas {
+  height: 30px;
+  width: 30px;
+}
+
+.header-master .knob .knob-label {
+  display: none;
+}
+
+/* -- viz canvases ------------------------------------------------------------ */
+
+.wave-viz {
+  cursor: ew-resize;
+  min-height: 130px;
+}
+
+.filter-viz {
+  cursor: crosshair;
+  min-height: 130px;
+}
+
+.env-viz {
+  min-height: 86px;
+}
+
+.lfo-viz {
+  min-height: 60px;
+}
+
+.viz {
+  touch-action: none;
+}
+
+/* -- LFO row ------------------------------------------------------------------ */
+
+.lfo-controls {
+  align-items: center;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+/* -- filter routing ------------------------------------------------------------ */
+
+.route-row {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+}
+
+/* -- mod matrix ------------------------------------------------------------------ */
+
+.matrix-row {
+  align-items: center;
+  border-radius: 6px;
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 16px minmax(0, 1.1fr) minmax(0, 1.3fr) minmax(0, 2fr) 44px;
+  padding: 2px 4px;
+  transition: background 0.12s ease;
+}
+
+.matrix-row.engaged {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.matrix-row .slot-index {
+  color: var(--text-dim);
+  font-size: 9px;
+  text-align: right;
+}
+
+.matrix-row.engaged .slot-index {
+  color: var(--accent);
+}
+
+.matrix-row select {
+  appearance: none;
+  background: #0c1218;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text-mid);
+  font-size: 10px;
+  min-width: 0;
+  padding: 3px 6px;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.matrix-row select:hover {
+  border-color: var(--line-strong);
+}
+
+.matrix-row.engaged select {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: color-mix(in srgb, var(--accent) 60%, #fff);
+}
+
+.matrix-row .readout {
+  font-size: 9px;
+}
+
+/* bipolar amount slider: thin track with a center tick */
+
+.amount-wrap {
+  align-items: center;
+  display: flex;
+  position: relative;
+}
+
+.amount-wrap::before {
+  background: var(--line-strong);
+  content: "";
+  height: 10px;
+  left: 50%;
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: 1px;
+}
+
+.amount-wrap input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  height: 18px;
+  margin: 0;
+  width: 100%;
+}
+
+.amount-wrap input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(180deg, #0b1117, #101820);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  height: 6px;
+}
+
+.amount-wrap input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent));
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, #000);
+  border-radius: 999px;
+  height: 12px;
+  margin-top: -4px;
+  width: 12px;
+}
+
+.amount-wrap input[type="range"]::-moz-range-track {
+  background: #0e141b;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  height: 6px;
+}
+
+.amount-wrap input[type="range"]::-moz-range-thumb {
+  background: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, #000);
+  border-radius: 999px;
+  height: 12px;
+  width: 12px;
+}
+
+.bottom-row {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr);
+}
+
+/* -- preview keyboard ---------------------------------------------------------- */
+
+.keys-wrap {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.keyboard {
+  display: flex;
+  height: 64px;
+  position: relative;
+  touch-action: none;
+  user-select: none;
+}
+
+.keyboard .key.white {
+  background: linear-gradient(180deg, #d8dee4, #b9c2ca 85%, #9aa5ae);
+  border: 1px solid #1c242c;
+  border-radius: 0 0 3px 3px;
+  flex: 1;
+  margin: 0 0.5px;
+}
+
+.keyboard .key.black {
+  background: linear-gradient(180deg, #2a323b, #0d1218);
+  border: 1px solid #05080c;
+  border-radius: 0 0 3px 3px;
+  height: 60%;
+  position: absolute;
+  top: 0;
+  width: 1.4%;
+  z-index: 2;
+}
+
+.keyboard .key.white.held {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 75%, #fff), var(--accent));
+}
+
+.keyboard .key.black.held {
+  background: linear-gradient(180deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #000));
+}
+
+.keyboard .key.white.c-key::after {
+  bottom: 2px;
+  color: #39424b;
+  content: attr(data-label);
+  font-size: 7px;
+  left: 50%;
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+.keyboard .key.white {
+  position: relative;
+}
+
+/* -- tooltip -------------------------------------------------------------------- */
+
+.tooltip {
+  background: #0c1218;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 5px;
+  color: color-mix(in srgb, var(--accent) 70%, #fff);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  left: 0;
+  padding: 3px 7px;
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  white-space: nowrap;
+  z-index: 50;
+}
+
+@media (max-width: 860px) {
+  .bottom-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panels.cols-4.mid-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* tight segmented buttons in panel heads / LFO rows */
+
+#filter-type .segmented button,
+.lfo-controls .segmented button {
+  font-size: 9px;
+  letter-spacing: 0;
+  padding: 3px 1px;
+}
