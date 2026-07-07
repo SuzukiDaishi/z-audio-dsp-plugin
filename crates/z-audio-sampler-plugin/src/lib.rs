@@ -1,247 +1,134 @@
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock};
+//! Native VST3/CLAP build of Z Audio Sampler — the Logic-style multi-zone
+//! sampler. The engine (`ZoneSampler`), the `ZSMP` UI protocol, and (on
+//! Windows/macOS) the web UI itself are shared with the WebCLAP build in
+//! `crates/z-audio-webclap-sampler`; this crate is the `nih_plug` adapter.
+//!
+//! Editor strategy:
+//! - Windows/macOS: the WebCLAP `ui/` bundle in a wry webview. Params ride
+//!   the shared JSON param sync; sample uploads / zone tables / keyboard
+//!   previews ride the `{"type":"bin"}` envelope (see
+//!   `crates/z-audio-webview-editor`) into [`shared::SamplerShared`].
+//! - elsewhere: a reduced egui editor (file load as one Classic zone).
+//!
+//! Like the WebCLAP build, only parameters persist in host projects; the
+//! sample PCM does not, so files must be reloaded after reopening a
+//! project. An embedded piano preview bank plays until a file is loaded.
+
+use std::sync::Arc;
 
 use nih_plug::prelude::*;
-use nih_plug_egui::EguiState;
-use z_audio_dsp::{EventKind, ParamId, TimedEvent};
-use z_audio_synth::{GenericSampler, GenericSamplerConfig, SamplerBank};
+use z_audio_webclap_sampler::engine::{classic_zone, GlobalParams, ZoneSampler};
 
+#[cfg(not(any(windows, target_os = "macos")))]
 mod decode;
+#[cfg(not(any(windows, target_os = "macos")))]
 mod editor;
-mod state;
+mod shared;
 
-use state::{BankUpdate, LoadStatus};
+use shared::{NotePreview, SamplerShared, SamplerUpdate};
 
-const MAX_POLYPHONY: usize = 16;
-const SAMPLER_AUTOMATABLE_IDS: [ParamId; 14] = [
-    ParamId::SamplerMasterGain,
-    ParamId::SamplerRootNote,
-    ParamId::SamplerTune,
-    ParamId::SamplerOffset,
-    ParamId::SamplerVelocityCurve,
-    ParamId::SamplerReleaseTime,
-    ParamId::SamplerStereoWidth,
-    ParamId::SamplerLoopMode,
-    ParamId::SamplerLoopStart,
-    ParamId::SamplerLoopEnd,
-    ParamId::SamplerLoopXfade,
-    ParamId::SamplerUnisonVoices,
-    ParamId::SamplerUnisonDetune,
-    ParamId::SamplerUnisonSpread,
-];
-
-/// The bundled demo bank is read once per process and shared by every
-/// plugin instance via `Arc`; it's only used as a fallback until the user
-/// loads their own sample (or restores a previously persisted one).
-fn shared_demo_bank() -> Option<Arc<SamplerBank>> {
-    static BANK: OnceLock<Option<Arc<SamplerBank>>> = OnceLock::new();
-    BANK.get_or_init(load_demo_bank_from_disk).clone()
+/// One note event with its intra-block sample offset.
+#[derive(Clone, Copy)]
+struct TimedNote {
+    at: usize,
+    on: bool,
+    key: u8,
+    velocity: f32,
 }
 
-fn load_demo_bank_from_disk() -> Option<Arc<SamplerBank>> {
-    let path = locate_demo_bank_path()?;
-    let bytes = std::fs::read(&path).ok()?;
-    let bank = z_audio_synth::load_sampler_bank_bytes(&bytes).ok()?;
-    Some(Arc::new(bank))
-}
-
-/// Looks for the demo sampler bank produced by `cargo xtask
-/// prepare-sampler-bank`. Checks `Z_AUDIO_SAMPLER_BANK` first, then a path
-/// relative to the current working directory; if neither resolves, the
-/// plugin stays silent instead of failing to load.
-fn locate_demo_bank_path() -> Option<PathBuf> {
-    if let Ok(value) = std::env::var("Z_AUDIO_SAMPLER_BANK") {
-        let path = PathBuf::from(value);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    let default = PathBuf::from("assets/sampler/piano.bank");
-    if default.is_file() {
-        return Some(default);
-    }
-    None
-}
-
-/// Decodes the user-loaded sample at `path` (persisted plugin state) into a
-/// fresh [`SamplerBank`]. Only called from `initialize`/`reset` (non-
-/// realtime setup callbacks), never from `process`.
-fn load_user_bank_from_path(path: &str) -> Result<Arc<SamplerBank>, String> {
-    let path = PathBuf::from(path);
-    if !path.is_file() {
-        return Err(format!("file not found: '{}'", path.display()));
-    }
-    let (sample_rate, channels, pcm) = decode::decode_audio_file(&path)?;
-    Ok(Arc::new(SamplerBank {
-        sample: z_audio_dsp::SampleBuffer::new(sample_rate, channels, pcm),
-        default_root_note: 60,
-    }))
-}
-
+/// Mirrors the WebCLAP param surface (web ids 300-308) one-to-one; the
+/// editor mapping in [`ZAudioSampler::editor`] pairs them up.
 #[derive(Params)]
 pub struct ZAudioSamplerParams {
-    #[persist = "editor-state"]
-    editor_state: Arc<EguiState>,
-    /// Absolute path to the user-loaded sample, persisted so the same file
-    /// is reloaded when the DAW restores this plugin's state. `None` until
-    /// the user picks a file via the editor.
-    #[persist = "sample-path"]
-    sample_path: Arc<Mutex<Option<String>>>,
-
-    #[id = "sampler_master_gain"]
-    master_gain: FloatParam,
-    #[id = "sampler_root_note"]
-    root_note: FloatParam,
-    #[id = "sampler_tune"]
-    tune: FloatParam,
-    #[id = "sampler_offset"]
-    offset: FloatParam,
-    #[id = "sampler_velocity_curve"]
-    velocity_curve: FloatParam,
-    #[id = "sampler_release_time"]
-    release_time: FloatParam,
-    #[id = "sampler_stereo_width"]
-    stereo_width: FloatParam,
-    /// `0`=Off, `1`=Infinite, `2`=Sustain, `3`=PingPong, `4`=Reverse (see
-    /// [`z_audio_dsp::LoopMode`]).
-    #[id = "sampler_loop_mode"]
-    loop_mode: FloatParam,
-    #[id = "sampler_loop_start"]
-    loop_start: FloatParam,
-    #[id = "sampler_loop_end"]
-    loop_end: FloatParam,
-    #[id = "sampler_loop_xfade"]
-    loop_xfade: FloatParam,
-    #[id = "sampler_unison_voices"]
-    unison_voices: FloatParam,
-    #[id = "sampler_unison_detune"]
-    unison_detune: FloatParam,
-    #[id = "sampler_unison_spread"]
-    unison_spread: FloatParam,
+    #[id = "gain"]
+    pub gain: FloatParam,
+    #[id = "attack"]
+    pub attack: FloatParam,
+    #[id = "decay"]
+    pub decay: FloatParam,
+    #[id = "sustain"]
+    pub sustain: FloatParam,
+    #[id = "release"]
+    pub release: FloatParam,
+    #[id = "tune"]
+    pub tune: FloatParam,
+    #[id = "transpose"]
+    pub transpose: FloatParam,
+    #[id = "velocity"]
+    pub velocity: FloatParam,
+    #[id = "width"]
+    pub width: FloatParam,
 }
 
 impl Default for ZAudioSamplerParams {
     fn default() -> Self {
+        // Ranges and defaults match the WebCLAP build's `param_defs()`.
+        // No smoothers: the engine bakes params into trigger regions and
+        // rebuilds them only when a value actually changes.
+        let linear = |name: &str, unit: &'static str, min: f32, max: f32, default: f32| {
+            FloatParam::new(name, default, FloatRange::Linear { min, max }).with_unit(unit)
+        };
         Self {
-            editor_state: EguiState::from_size(420, 520),
-            sample_path: Arc::new(Mutex::new(None)),
-            master_gain: float_param(ParamId::SamplerMasterGain, "Master Gain", " dB"),
-            root_note: float_param(ParamId::SamplerRootNote, "Root Note", ""),
-            tune: float_param(ParamId::SamplerTune, "Tune", " cents"),
-            offset: float_param(ParamId::SamplerOffset, "Offset", ""),
-            velocity_curve: float_param(ParamId::SamplerVelocityCurve, "Velocity Curve", ""),
-            release_time: float_param(ParamId::SamplerReleaseTime, "Release Time", " s"),
-            stereo_width: float_param(ParamId::SamplerStereoWidth, "Stereo Width", ""),
-            loop_mode: float_param(ParamId::SamplerLoopMode, "Loop Mode", ""),
-            loop_start: float_param(ParamId::SamplerLoopStart, "Loop Start", ""),
-            loop_end: float_param(ParamId::SamplerLoopEnd, "Loop End", ""),
-            loop_xfade: float_param(ParamId::SamplerLoopXfade, "Loop Crossfade", " s"),
-            unison_voices: float_param(ParamId::SamplerUnisonVoices, "Unison Voices", ""),
-            unison_detune: float_param(ParamId::SamplerUnisonDetune, "Unison Detune", " cents"),
-            unison_spread: float_param(ParamId::SamplerUnisonSpread, "Unison Spread", ""),
+            gain: linear("Master Gain", " dB", -48.0, 12.0, 0.0),
+            attack: linear("Attack", " s", 0.001, 5.0, 0.002),
+            decay: linear("Decay", " s", 0.0, 5.0, 0.0),
+            sustain: linear("Sustain", "", 0.0, 1.0, 1.0),
+            release: linear("Release", " s", 0.01, 10.0, 0.25),
+            tune: linear("Tune", " ct", -100.0, 100.0, 0.0),
+            transpose: linear("Transpose", " st", -24.0, 24.0, 0.0).with_step_size(1.0),
+            velocity: linear("Velocity Sens", "", 0.0, 1.0, 1.0),
+            width: linear("Stereo Width", "", 0.0, 1.0, 1.0),
         }
     }
 }
 
 pub struct ZAudioSampler {
     params: Arc<ZAudioSamplerParams>,
-    sampler: Option<GenericSampler>,
-    /// Bank swap requested by the editor (e.g. "Load Sample..."), applied
-    /// at the top of the next `process` call via a non-blocking `try_lock`.
-    pending_bank: Arc<Mutex<Option<BankUpdate>>>,
-    /// Editor-facing load status; not persisted (recomputed by `reinit`).
-    status: Arc<Mutex<LoadStatus>>,
-    note_events: Vec<TimedEvent>,
-    events: Vec<TimedEvent>,
-    last_values: [f32; SAMPLER_AUTOMATABLE_IDS.len()],
-    sample_rate: f32,
-    max_block_size: usize,
+    sampler: ZoneSampler,
+    shared: Arc<SamplerShared>,
+    notes: Vec<TimedNote>,
+    previews: Vec<NotePreview>,
 }
 
 impl Default for ZAudioSampler {
     fn default() -> Self {
+        let mut sampler = ZoneSampler::new(48_000.0);
+        if let Some((source, root)) = z_audio_webclap_sampler::dev_bank() {
+            let frames = source.frames() as u32;
+            sampler.set_source(source, vec![classic_zone(root, frames)]);
+        }
+        let shared = Arc::new(SamplerShared::mirroring(&sampler));
         Self {
             params: Arc::new(ZAudioSamplerParams::default()),
-            sampler: None,
-            pending_bank: Arc::new(Mutex::new(None)),
-            status: Arc::new(Mutex::new(LoadStatus::Empty)),
-            note_events: Vec::with_capacity(64),
-            events: Vec::with_capacity(128),
-            last_values: [f32::NAN; SAMPLER_AUTOMATABLE_IDS.len()],
-            sample_rate: 48_000.0,
-            max_block_size: 512,
+            sampler,
+            shared,
+            notes: Vec::with_capacity(128),
+            previews: Vec::with_capacity(64),
         }
     }
 }
 
 impl ZAudioSampler {
-    /// Resolves which bank to (re)load on init/reset, preferring (in
-    /// order): the bank already running in memory (so a sample-rate change
-    /// doesn't drop a user-loaded sample), the persisted sample path (DAW
-    /// state restore), then the bundled demo bank.
-    fn resolve_bank(&self) -> Option<Arc<SamplerBank>> {
-        if let Some(bank) = self.sampler.as_ref().and_then(|s| s.bank()) {
-            return Some(bank);
+    fn global_params(&self) -> GlobalParams {
+        GlobalParams {
+            master_gain_db: self.params.gain.value(),
+            attack_s: self.params.attack.value(),
+            decay_s: self.params.decay.value(),
+            sustain: self.params.sustain.value(),
+            release_s: self.params.release.value(),
+            tune_cents: self.params.tune.value(),
+            transpose_semitones: self.params.transpose.value().round(),
+            velocity_amount: self.params.velocity.value(),
+            stereo_width: self.params.width.value(),
         }
-        let path = self.params.sample_path.lock().unwrap().clone();
-        if let Some(path) = path {
-            match load_user_bank_from_path(&path) {
-                Ok(bank) => {
-                    let file_name = PathBuf::from(&path)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or(path.clone());
-                    *self.status.lock().unwrap() = LoadStatus::Loaded { file_name };
-                    return Some(bank);
-                }
-                Err(message) => {
-                    *self.status.lock().unwrap() = LoadStatus::Missing { path: message };
-                    return shared_demo_bank();
-                }
-            }
-        }
-        shared_demo_bank()
     }
 
-    fn reinit(&mut self) {
-        let bank = self.resolve_bank();
-        let mut sampler = GenericSampler::new(GenericSamplerConfig {
-            sample_rate: self.sample_rate,
-            max_block_size: self.max_block_size,
-            max_polyphony: MAX_POLYPHONY,
-        });
-        if let Some(bank) = bank {
-            sampler.load_bank(bank);
-        }
-        for (i, id) in SAMPLER_AUTOMATABLE_IDS.iter().enumerate() {
-            let value = current_param_value(&self.params, *id);
-            sampler.set_param(*id, value);
-            self.last_values[i] = value;
-        }
-        self.sampler = Some(sampler);
-    }
-
-    /// Picks up a bank swap requested by the editor, if any, without
-    /// blocking (a held lock just means the editor is mid-update; we'll
-    /// catch it on the next block).
-    fn apply_pending_bank(&mut self) {
-        let Ok(mut pending) = self.pending_bank.try_lock() else {
-            return;
-        };
-        let Some(update) = pending.take() else {
-            return;
-        };
-        drop(pending);
-        let Some(sampler) = self.sampler.as_mut() else {
-            return;
-        };
-        match update {
-            BankUpdate::Loaded(bank) => sampler.load_bank(bank),
-            BankUpdate::Cleared => {
-                if let Some(bank) = shared_demo_bank() {
-                    sampler.load_bank(bank);
-                }
-            }
+    fn trigger(&mut self, note: TimedNote) {
+        if note.on {
+            self.sampler
+                .note_on(note.key & 0x7f, note.velocity.clamp(0.0, 1.0));
+        } else {
+            self.sampler.note_off(note.key & 0x7f);
         }
     }
 }
@@ -266,12 +153,50 @@ impl Plugin for ZAudioSampler {
         self.params.clone()
     }
 
+    // Windows/macOS open the WebCLAP UI in a wry webview; ZSMP packets
+    // ride the bin envelope into the shared bridge.
+    #[cfg(any(windows, target_os = "macos"))]
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create_sampler_editor(
-            self.params.clone(),
-            self.pending_bank.clone(),
-            self.status.clone(),
+        use z_audio_webview_editor::{create_webview_editor_with_messages, inline_ui_html, map};
+        static HTML: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        let html = HTML.get_or_init(|| {
+            inline_ui_html(
+                include_str!("../../z-audio-webclap-sampler/ui/index.html"),
+                include_str!("../../z-audio-webclap-sampler/ui/styles.css"),
+                // The third slot inlines `onsets.js` the same way `zui.js`
+                // is inlined for the other plugins (export-stripped module
+                // prepended to an import-stripped main.js).
+                include_str!("../../z-audio-webclap-sampler/ui/onsets.js"),
+                include_str!("../../z-audio-webclap-sampler/ui/main.js"),
+            )
+        });
+        let shared = self.shared.clone();
+        let p = &self.params;
+        create_webview_editor_with_messages(
+            html.as_str(),
+            (880, 720),
+            vec![
+                map(300, p.gain.as_ptr()),
+                map(301, p.attack.as_ptr()),
+                map(302, p.decay.as_ptr()),
+                map(303, p.sustain.as_ptr()),
+                map(304, p.release.as_ptr()),
+                map(305, p.tune.as_ptr()),
+                map(306, p.transpose.as_ptr()),
+                map(307, p.velocity.as_ptr()),
+                map(308, p.width.as_ptr()),
+            ],
+            Some(Arc::new(
+                move |bytes: &[u8], reply: &mut dyn FnMut(&[u8])| {
+                    shared.on_ui_message(bytes, reply)
+                },
+            )),
         )
+    }
+
+    #[cfg(not(any(windows, target_os = "macos")))]
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        editor::create_sampler_editor(self.params.clone(), self.shared.clone())
     }
 
     fn initialize(
@@ -280,17 +205,17 @@ impl Plugin for ZAudioSampler {
         buffer_config: &BufferConfig,
         _context: &mut impl InitContext<Self>,
     ) -> bool {
-        self.sample_rate = buffer_config.sample_rate;
-        self.max_block_size = buffer_config.max_buffer_size as usize;
-        self.note_events = Vec::with_capacity(self.max_block_size.max(64));
-        self.events =
-            Vec::with_capacity(self.max_block_size.max(64) + SAMPLER_AUTOMATABLE_IDS.len());
-        self.reinit();
+        self.sampler.set_sample_rate(buffer_config.sample_rate);
+        let capacity = (buffer_config.max_buffer_size as usize).max(64);
+        if self.notes.capacity() < capacity {
+            self.notes.reserve_exact(capacity - self.notes.capacity());
+        }
         true
     }
 
     fn reset(&mut self) {
-        self.reinit();
+        // Drop voices, keep the loaded sample and zones (same as WebCLAP).
+        self.sampler.reset_voices();
     }
 
     fn process(
@@ -299,9 +224,42 @@ impl Plugin for ZAudioSampler {
         _aux: &mut AuxiliaryBuffers,
         context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
-        self.apply_pending_bank();
+        // Editor-prepared updates. `set_source`/`set_zones` re-cut zone PCM
+        // on this thread; that allocation is rare (user file loads / marker
+        // drags) and matches what the WebCLAP build does in its
+        // single-threaded `on_ui_message`.
+        match self.shared.take_update() {
+            Some(SamplerUpdate::Commit {
+                source: Some(source),
+                zones,
+            }) => self.sampler.set_source(source, zones),
+            Some(SamplerUpdate::Commit {
+                source: None,
+                zones,
+            }) => self.sampler.set_zones(zones),
+            Some(SamplerUpdate::Clear) => self.sampler.clear(),
+            None => {}
+        }
 
-        self.note_events.clear();
+        // No-op inside the engine unless a value actually changed.
+        self.sampler.set_params(self.global_params());
+
+        // Editor keyboard previews trigger at block start; sample-accurate
+        // placement only matters for host-sequenced notes below.
+        let mut previews = std::mem::take(&mut self.previews);
+        previews.clear();
+        self.shared.drain_notes(&mut previews);
+        for preview in &previews {
+            self.trigger(TimedNote {
+                at: 0,
+                on: preview.on,
+                key: preview.key,
+                velocity: preview.velocity as f32 / 127.0,
+            });
+        }
+        self.previews = previews;
+
+        self.notes.clear();
         while let Some(event) = context.next_event() {
             match event {
                 NoteEvent::NoteOn {
@@ -309,64 +267,65 @@ impl Plugin for ZAudioSampler {
                     note,
                     velocity,
                     ..
-                } => {
-                    if self.note_events.len() < self.note_events.capacity() {
-                        self.note_events.push(TimedEvent {
-                            sample_offset: timing as usize,
-                            kind: EventKind::NoteOn { note, velocity },
-                        });
-                    }
-                }
-                NoteEvent::NoteOff {
-                    timing,
-                    note,
+                } => self.notes.push(TimedNote {
+                    at: timing as usize,
+                    on: true,
+                    key: note,
                     velocity,
-                    ..
-                } => {
-                    if self.note_events.len() < self.note_events.capacity() {
-                        self.note_events.push(TimedEvent {
-                            sample_offset: timing as usize,
-                            kind: EventKind::NoteOff { note, velocity },
-                        });
-                    }
-                }
+                }),
+                NoteEvent::NoteOff { timing, note, .. } => self.notes.push(TimedNote {
+                    at: timing as usize,
+                    on: false,
+                    key: note,
+                    velocity: 0.0,
+                }),
                 _ => {}
             }
         }
 
-        let Some(sampler) = self.sampler.as_mut() else {
-            return ProcessStatus::Normal;
-        };
-        self.events.clear();
-        for (i, id) in SAMPLER_AUTOMATABLE_IDS.iter().enumerate() {
-            let value = current_param_value(&self.params, *id);
-            if value != self.last_values[i] {
-                self.last_values[i] = value;
-                self.events.push(TimedEvent {
-                    sample_offset: 0,
-                    kind: EventKind::Param { id: *id, value },
-                });
-            }
-        }
-        self.events.extend(self.note_events.iter().copied());
-        self.events.sort_by_key(|event| event.sample_offset);
-
         let output = buffer.as_slice();
-        let (left_slice, right_slice) = output.split_at_mut(1);
-        let ctx = z_audio_dsp::ProcessContext::new(
-            self.sample_rate,
-            left_slice[0].len(),
-            context.transport().tempo.unwrap_or(120.0) as f32,
-            &self.events,
-        );
-        sampler.process_with_context(&ctx, left_slice[0], right_slice[0]);
+        if output.len() < 2 {
+            return ProcessStatus::Normal;
+        }
+        let (left_channel, rest) = output.split_at_mut(1);
+        let frames = left_channel[0].len();
+
+        // Render in segments split at note-event offsets so triggers land
+        // sample-accurately within the block (same as the WebCLAP build).
+        let mut start = 0usize;
+        let mut event_index = 0usize;
+        while start < frames {
+            let mut end = frames;
+            while event_index < self.notes.len() {
+                let note = self.notes[event_index];
+                let at = note.at.min(frames);
+                if at <= start {
+                    self.trigger(note);
+                    event_index += 1;
+                    continue;
+                }
+                end = at;
+                break;
+            }
+            if end > start {
+                self.sampler
+                    .render(&mut left_channel[0][start..end], &mut rest[0][start..end]);
+            }
+            start = end;
+        }
+        while event_index < self.notes.len() {
+            let note = self.notes[event_index];
+            self.trigger(note);
+            event_index += 1;
+        }
         ProcessStatus::Normal
     }
 }
 
 impl ClapPlugin for ZAudioSampler {
     const CLAP_ID: &'static str = "dev.zaudio.sampler";
-    const CLAP_DESCRIPTION: Option<&'static str> = Some("General-purpose single-sample sampler instrument");
+    const CLAP_DESCRIPTION: Option<&'static str> =
+        Some("Multi-zone sampler: load a file in the UI, auto-slice, map to keys");
     const CLAP_MANUAL_URL: Option<&'static str> = Some(Self::URL);
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[
@@ -377,7 +336,9 @@ impl ClapPlugin for ZAudioSampler {
 }
 
 impl Vst3Plugin for ZAudioSampler {
-    const VST3_CLASS_ID: [u8; 16] = *b"ZAudioSamplerGen";
+    // Fresh class id: the multi-zone rewrite shares nothing (params, state)
+    // with the old never-shipped single-sample plugin (`ZAudioSamplerGen`).
+    const VST3_CLASS_ID: [u8; 16] = *b"ZAudioSamplerMZ1";
     const VST3_SUBCATEGORIES: &'static [Vst3SubCategory] = &[
         Vst3SubCategory::Instrument,
         Vst3SubCategory::Sampler,
@@ -385,39 +346,29 @@ impl Vst3Plugin for ZAudioSampler {
     ];
 }
 
-fn current_param_value(params: &ZAudioSamplerParams, id: ParamId) -> f32 {
-    match id {
-        ParamId::SamplerMasterGain => params.master_gain.value(),
-        ParamId::SamplerRootNote => params.root_note.value(),
-        ParamId::SamplerTune => params.tune.value(),
-        ParamId::SamplerOffset => params.offset.value(),
-        ParamId::SamplerVelocityCurve => params.velocity_curve.value(),
-        ParamId::SamplerReleaseTime => params.release_time.value(),
-        ParamId::SamplerStereoWidth => params.stereo_width.value(),
-        ParamId::SamplerLoopMode => params.loop_mode.value(),
-        ParamId::SamplerLoopStart => params.loop_start.value(),
-        ParamId::SamplerLoopEnd => params.loop_end.value(),
-        ParamId::SamplerLoopXfade => params.loop_xfade.value(),
-        ParamId::SamplerUnisonVoices => params.unison_voices.value(),
-        ParamId::SamplerUnisonDetune => params.unison_detune.value(),
-        ParamId::SamplerUnisonSpread => params.unison_spread.value(),
-        _ => id.metadata().default,
-    }
-}
-
-fn float_param(id: ParamId, name: &'static str, unit: &'static str) -> FloatParam {
-    let m = id.metadata();
-    FloatParam::new(
-        name,
-        m.default,
-        FloatRange::Linear {
-            min: m.min,
-            max: m.max,
-        },
-    )
-    .with_unit(unit)
-    .with_smoother(SmoothingStyle::Linear(10.0))
-}
-
 nih_export_clap!(ZAudioSampler);
 nih_export_vst3!(ZAudioSampler);
+
+#[cfg(test)]
+mod tests {
+    /// The webview editor inlines the sampler UI (with `onsets.js` in the
+    /// module slot) into one self-contained page; make sure that
+    /// composition holds for the real files, on every platform.
+    #[test]
+    fn sampler_ui_inlines_into_one_self_contained_page() {
+        let html = z_audio_webview_editor::inline_ui_html(
+            include_str!("../../z-audio-webclap-sampler/ui/index.html"),
+            include_str!("../../z-audio-webclap-sampler/ui/styles.css"),
+            include_str!("../../z-audio-webclap-sampler/ui/onsets.js"),
+            include_str!("../../z-audio-webclap-sampler/ui/main.js"),
+        );
+        // No module plumbing may survive the inlining.
+        assert!(!html.contains("\nimport "));
+        assert!(!html.contains("\nexport "));
+        assert!(!html.contains("src=\"./main.js\""));
+        assert!(!html.contains("href=\"./styles.css\""));
+        // onsets.js and the native transport branch made it into the page.
+        assert!(html.contains("function computeOnsetCurve"));
+        assert!(html.contains("window.sendToPlugin"));
+    }
+}

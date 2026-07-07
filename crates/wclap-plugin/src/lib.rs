@@ -624,7 +624,11 @@ struct LatencyExt {
 // is named that way. By naming the actual ClapEntry struct `clap_entry`,
 // the global directly points at the struct — no indirection slot, which
 // is what the host expects (compare clack-plugin-gain).
-#[no_mangle]
+//
+// Only exported on wasm32: native builds that link a WebCLAP crate as an
+// rlib (e.g. z-audio-sampler-plugin sharing its engine) define their own
+// `clap_entry` via `nih_export_clap!`.
+#[cfg_attr(target_arch = "wasm32", no_mangle)]
 #[allow(non_upper_case_globals)]
 pub static mut clap_entry: ClapEntry = ClapEntry {
     version_major: 1,

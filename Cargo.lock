@@ -4908,15 +4908,15 @@ dependencies = [
 
 [[package]]
 name = "z-audio-sampler-plugin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "claxon",
  "hound",
  "nih_plug",
  "nih_plug_egui",
  "rfd",
- "z-audio-dsp",
- "z-audio-synth",
+ "z-audio-webclap-sampler",
+ "z-audio-webview-editor",
 ]
 
 [[package]]
@@ -5024,6 +5024,7 @@ dependencies = [
 name = "z-audio-webview-editor"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "nih_plug",
  "nih_plug_webview",
  "serde_json",

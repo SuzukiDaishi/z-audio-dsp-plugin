@@ -1,9 +1,10 @@
 [package]
 name = "z-audio-sampler-plugin"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 publish = false
+description = "Native VST3/CLAP build of the multi-zone Z Audio Sampler (engine/protocol/UI shared with z-audio-webclap-sampler)."
 
 [lib]
 name = "z_audio_sampler_plugin"
@@ -11,9 +12,21 @@ crate-type = ["cdylib", "lib"]
 
 [dependencies]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
+z-audio-webclap-sampler = { path = "../z-audio-webclap-sampler" }
+
+# Windows/macOS reuse the WebCLAP UI in a wry webview.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+z-audio-webview-editor = { path = "../z-audio-webview-editor" }
+
+# The (target-independent) UI inliner, so the editor page composition is
+# unit-tested on every platform even though the webview itself is gated.
+[dev-dependencies]
+z-audio-webview-editor = { path = "../z-audio-webview-editor" }
+
+# Other platforms fall back to a reduced egui editor with native file
+# loading (wry cannot embed into host-owned windows there).
+[target.'cfg(not(any(windows, target_os = "macos")))'.dependencies]
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
-z-audio-dsp = { path = "../../thirdparty/z-audio-dsp/crates/z-audio-dsp" }
-z-audio-synth = { path = "../../thirdparty/z-audio-dsp/crates/z-audio-synth" }
 claxon = "0.4"
 hound = "3.5"
 rfd = "0.15"
