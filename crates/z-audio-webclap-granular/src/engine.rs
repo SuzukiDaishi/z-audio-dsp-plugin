@@ -405,6 +405,15 @@ impl GranularEngine {
         self.spawned_grains
     }
 
+    /// Pre-sizes the per-voice scratch buffers for the host's maximum
+    /// block size so `render` never allocates on the audio thread.
+    pub fn reserve_block(&mut self, max_frames: usize) {
+        if self.scratch_l.len() < max_frames {
+            self.scratch_l.resize(max_frames, 0.0);
+            self.scratch_r.resize(max_frames, 0.0);
+        }
+    }
+
     /// Fills `out` with normalized (0..1) positions of active grains and
     /// returns how many were written — the UI's grain-activity display.
     pub fn grain_positions(&self, out: &mut [f32]) -> usize {

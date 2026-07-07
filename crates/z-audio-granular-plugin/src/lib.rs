@@ -334,6 +334,7 @@ impl Plugin for ZAudioGranular {
     ) -> bool {
         self.engine.set_sample_rate(buffer_config.sample_rate);
         let capacity = (buffer_config.max_buffer_size as usize).max(64);
+        self.engine.reserve_block(capacity);
         if self.notes.capacity() < capacity {
             self.notes.reserve_exact(capacity - self.notes.capacity());
         }
@@ -511,6 +512,65 @@ mod tests {
                 def.default
             );
         }
+    }
+
+    /// End-to-end audio path as the native adapter drives it: a UI file
+    /// load flows through the shared bridge into the engine, a note makes
+    /// sound, and note-off decays to a freed voice.
+    #[test]
+    fn shared_bridge_upload_note_renders_audio_and_decays() {
+        use z_audio_webclap_granular::protocol::{encode_begin, encode_chunk, encode_commit};
+
+        let mut engine = GranularEngine::new(48_000.0);
+        engine.reserve_block(512);
+        let shared = GranularShared::mirroring(&engine);
+
+        // "UI" uploads one second of a 220 Hz tone in protocol packets.
+        let pcm: Vec<f32> = (0..48_000)
+            .map(|i| (core::f32::consts::TAU * 220.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        let mut no_reply = |_: &[u8]| {};
+        shared.on_ui_message(&encode_begin(48_000.0, 1, 48_000), &mut no_reply);
+        for (index, chunk) in pcm.chunks(4_096).enumerate() {
+            shared.on_ui_message(&encode_chunk((index * 4_096) as u32, chunk), &mut no_reply);
+        }
+        shared.on_ui_message(&encode_commit(), &mut no_reply);
+
+        // Audio thread applies the update (as `process` does each block).
+        let Some(GranularUpdate::Commit(source)) = shared.take_update() else {
+            panic!("expected the uploaded source");
+        };
+        engine.set_source(source);
+
+        let mut p = *engine.params();
+        p.position = 0.5;
+        p.spawn_mode = 2; // density
+        p.density = 8.0;
+        // Decorrelate the grains: evenly spaced grains over a pure tone
+        // can sum to silence (anti-phase pairs).
+        p.random_position_ms = 300.0;
+        p.warm_start = true;
+        p.amp_release_s = 0.05;
+        engine.set_params(p);
+
+        engine.note_on(60, 1.0);
+        let mut l = [0.0f32; 512];
+        let mut r = [0.0f32; 512];
+        let mut energy = 0.0f32;
+        for _ in 0..20 {
+            engine.render(&mut l, &mut r);
+            assert!(l.iter().chain(r.iter()).all(|v| v.is_finite()));
+            energy += l.iter().map(|v| v * v).sum::<f32>();
+        }
+        assert!(energy > 0.1, "note should be audible, energy {energy}");
+
+        engine.note_off(60);
+        for _ in 0..200 {
+            engine.render(&mut l, &mut r);
+        }
+        assert_eq!(engine.active_voice_count(), 0, "release frees the voice");
+        engine.render(&mut l, &mut r);
+        assert!(l.iter().chain(r.iter()).all(|v| *v == 0.0));
     }
 
     /// The webview editor inlines the granular UI (with an empty module

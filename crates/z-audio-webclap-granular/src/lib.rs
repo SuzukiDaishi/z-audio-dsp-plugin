@@ -236,6 +236,7 @@ impl Plugin for ZAudioWebGranular {
         self.sample_rate = sample_rate as f32;
         self.engine.set_sample_rate(sample_rate as f32);
         let frames = (max_frames as usize).max(1);
+        self.engine.reserve_block(frames);
         self.left.resize(frames, 0.0);
         self.right.resize(frames, 0.0);
         reserve(&mut self.note_events, frames.max(64));
