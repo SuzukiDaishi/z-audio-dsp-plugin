@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z Audio Granular</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>Granular</h1>
+          <p class="eyebrow">Z AUDIO INSTRUMENT</p>
+        </div>
+        <div class="header-right">
+          <span id="file-label" class="file-label">No file</span>
+          <span id="status">Waiting for host</span>
+        </div>
+      </header>
+
+      <section class="wave-section">
+        <div id="wave-wrap" class="wave-wrap">
+          <canvas id="wave"></canvas>
+          <div id="drop-hint" class="drop-hint">
+            <strong>Drop an audio file</strong>
+            <span>or click to browse — wav / aiff / mp3 / ogg / flac</span>
+          </div>
+          <input
+            id="file-input"
+            type="file"
+            accept="audio/*,.wav,.aif,.aiff,.mp3,.ogg,.flac"
+            hidden
+          />
+        </div>
+        <div id="sample-info" class="sample-info"></div>
+      </section>
+
+      <section class="mode-panel">
+        <div class="mode-row">
+          <label class="inline">
+            <span>Root</span>
+            <select id="root-note"></select>
+          </label>
+          <nav class="mode-tabs spawn-tabs" id="spawn-tabs">
+            <button type="button" data-mode="0" class="active">FREE</button>
+            <button type="button" data-mode="1">SYNC</button>
+            <button type="button" data-mode="2">DENSITY</button>
+          </nav>
+        </div>
+        <div class="mode-row" id="row-rate">
+          <label class="inline slider wide">
+            <span>Rate</span>
+            <input id="rate" type="range" min="0" max="1000" step="1" />
+            <em id="rate-value"></em>
+          </label>
+        </div>
+        <div class="mode-row" id="row-sync" hidden>
+          <label class="inline">
+            <span>Sync</span>
+            <select id="sync-rate"></select>
+          </label>
+          <span class="hint" id="sync-hint"></span>
+        </div>
+        <div class="mode-row" id="row-density" hidden>
+          <label class="inline slider wide">
+            <span>Density</span>
+            <input id="density" type="range" min="0" max="1000" step="1" />
+            <em id="density-value"></em>
+          </label>
+        </div>
+        <div class="mode-row">
+          <button type="button" class="toggle" id="toggle-keytrack">LENGTH KEYTRACK</button>
+          <button type="button" class="toggle" id="toggle-align">ALIGN PHASES</button>
+          <button type="button" class="toggle" id="toggle-warm">WARM START</button>
+        </div>
+        <div class="mode-row">
+          <label class="inline">
+            <span>Chord</span>
+            <select id="chord-type"></select>
+          </label>
+          <label class="inline">
+            <span>Range</span>
+            <select id="chord-range"></select>
+          </label>
+          <label class="inline">
+            <span>Pattern</span>
+            <select id="chord-pattern"></select>
+          </label>
+        </div>
+      </section>
+
+      <section class="params" id="params"></section>
+
+      <section class="keys-section">
+        <div id="keyboard" class="keyboard"></div>
+      </section>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
