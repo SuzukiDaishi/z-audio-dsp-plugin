@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en" style="--accent: #a3e04a; --accent-soft: rgba(163, 224, 74, 0.16)">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z Audio Wave Synth</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <style>
+      /* Wave-synth-specific layout on top of the shared design system. */
+      main {
+        grid-template-rows: 44px minmax(0, 1fr);
+        overflow: hidden;
+      }
+      .synth-body {
+        align-content: start;
+        display: grid;
+        gap: 8px;
+        /* auto rows compress below content height when space is tight;
+           max-content keeps panels whole and lets this container scroll. */
+        grid-auto-rows: max-content;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      .synth-body .panels {
+        overflow-y: visible;
+      }
+      .osc-head {
+        align-items: center;
+        display: flex;
+        justify-content: space-between;
+      }
+      .osc-head .control-toggle {
+        grid-template-columns: auto auto;
+        min-height: 0;
+      }
+      .osc-head .control-toggle .control-label {
+        display: none;
+      }
+      .section .viz {
+        min-height: 96px;
+      }
+      .controls-2col {
+        display: grid;
+        gap: 2px 12px;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .controls-2col .control {
+        grid-template-columns: 62px 1fr 52px;
+      }
+      .matrix-row {
+        align-items: center;
+        display: grid;
+        gap: 6px;
+        grid-template-columns: 24px minmax(0, 1.2fr) minmax(0, 1.4fr) minmax(0, 2fr) 52px;
+      }
+      .matrix-row .slot-index {
+        color: var(--text-dim);
+        font-size: 10px;
+        text-align: right;
+      }
+      .matrix-row select {
+        background: #0c1218;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        color: var(--text-mid);
+        font-size: 10px;
+        min-width: 0;
+        padding: 3px 4px;
+      }
+      .matrix-row select.engaged {
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+        color: color-mix(in srgb, var(--accent) 65%, #fff);
+      }
+      .matrix-row input[type="range"] {
+        -webkit-appearance: none;
+        appearance: none;
+        background: transparent;
+        height: 18px;
+        margin: 0;
+        width: 100%;
+      }
+      .matrix-row input[type="range"]::-webkit-slider-runnable-track {
+        background: linear-gradient(180deg, #0b1117, #101820);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        height: 8px;
+      }
+      .matrix-row input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent));
+        border: 1px solid color-mix(in srgb, var(--accent) 60%, #000);
+        border-radius: 999px;
+        height: 14px;
+        margin-top: -4px;
+        width: 14px;
+      }
+      .matrix-row input[type="range"]::-moz-range-track {
+        background: #0e141b;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        height: 8px;
+      }
+      .matrix-row input[type="range"]::-moz-range-thumb {
+        background: var(--accent);
+        border: 1px solid color-mix(in srgb, var(--accent) 60%, #000);
+        border-radius: 999px;
+        height: 14px;
+        width: 14px;
+      }
+      .bottom-row {
+        display: grid;
+        gap: 8px;
+        grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr);
+      }
+      @media (max-width: 760px) {
+        .bottom-row {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>Wave Synth</h1>
+          <p class="eyebrow">Z AUDIO INSTRUMENT</p>
+        </div>
+        <div class="header-right">
+          <span class="header-note" id="voice-note">0 voices</span>
+          <span id="status">Waiting for host</span>
+        </div>
+      </header>
+
+      <div class="synth-body">
+        <div class="panels cols-3">
+          <section class="section" id="sec-osc-a">
+            <div class="osc-head">
+              <h2 class="section-title">OSC A</h2>
+              <span id="osc-a-enable"></span>
+            </div>
+            <div class="viz">
+              <canvas id="viz-osc-a"></canvas>
+              <span class="viz-caption" id="cap-osc-a">Basic Shapes</span>
+            </div>
+            <div id="osc-a-table"></div>
+            <div class="controls-2col" id="osc-a-controls"></div>
+          </section>
+
+          <section class="section" id="sec-osc-b">
+            <div class="osc-head">
+              <h2 class="section-title">OSC B</h2>
+              <span id="osc-b-enable"></span>
+            </div>
+            <div class="viz">
+              <canvas id="viz-osc-b"></canvas>
+              <span class="viz-caption" id="cap-osc-b">Basic Shapes</span>
+            </div>
+            <div id="osc-b-table"></div>
+            <div class="controls-2col" id="osc-b-controls"></div>
+          </section>
+
+          <section class="section" id="sec-filter">
+            <div class="osc-head">
+              <h2 class="section-title">Filter</h2>
+              <span id="filter-enable"></span>
+            </div>
+            <div class="viz">
+              <canvas id="viz-filter"></canvas>
+              <span class="viz-caption">Response</span>
+            </div>
+            <div id="filter-type"></div>
+            <div class="controls-2col" id="filter-controls"></div>
+            <div class="controls-2col" id="filter-routes"></div>
+          </section>
+        </div>
+
+        <div class="panels cols-4">
+          <section class="section">
+            <h2 class="section-title">Env 1 · Amp</h2>
+            <div class="viz" style="min-height: 72px">
+              <canvas id="viz-env1"></canvas>
+            </div>
+            <div id="env1-controls"></div>
+          </section>
+          <section class="section">
+            <h2 class="section-title">Env 2</h2>
+            <div class="viz" style="min-height: 72px">
+              <canvas id="viz-env2"></canvas>
+            </div>
+            <div id="env2-controls"></div>
+          </section>
+          <section class="section">
+            <h2 class="section-title">LFO 1</h2>
+            <div class="viz" style="min-height: 72px">
+              <canvas id="viz-lfo1"></canvas>
+            </div>
+            <div id="lfo1-controls"></div>
+          </section>
+          <section class="section">
+            <h2 class="section-title">LFO 2</h2>
+            <div class="viz" style="min-height: 72px">
+              <canvas id="viz-lfo2"></canvas>
+            </div>
+            <div id="lfo2-controls"></div>
+          </section>
+        </div>
+
+        <div class="bottom-row">
+          <section class="section">
+            <h2 class="section-title">Mod Matrix</h2>
+            <div id="matrix"></div>
+          </section>
+          <section class="section">
+            <h2 class="section-title">Global</h2>
+            <div id="global-controls"></div>
+          </section>
+        </div>
+      </div>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
