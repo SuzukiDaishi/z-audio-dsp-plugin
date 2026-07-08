@@ -681,6 +681,41 @@ mod tests {
     }
 
     #[test]
+    fn dev_bank_note_renders_audible_output_immediately() {
+        // End-to-end: default state (dev bank + classic zone), one note on,
+        // the first 100 ms of output must carry real signal.
+        let bytes = include_bytes!("../../../assets/sampler/piano-dev.bank");
+        let (source, root) = parse_dev_bank(bytes).expect("embedded bank parses");
+        let frames = source.frames() as u32;
+        let mut s = ZoneSampler::new(48_000.0);
+        s.set_source(source, vec![classic_zone(root, frames)]);
+        s.note_on(60, 0.9);
+        let mut l = [0.0f32; 4_800];
+        let mut r = [0.0f32; 4_800];
+        s.render(&mut l, &mut r);
+        assert!(rms(&l) > 0.01, "dev bank note is inaudible (rms {})", rms(&l));
+    }
+
+    #[test]
+    fn dev_bank_is_audible_from_the_start() {
+        // Regression: the embedded bank used to lead with 1.5 s of digital
+        // silence and peak at -42 dBFS, making the plugin appear silent.
+        let bytes = include_bytes!("../../../assets/sampler/piano-dev.bank");
+        let (source, _) = parse_dev_bank(bytes).expect("embedded bank parses");
+        let peak = source.data.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.5, "dev bank is too quiet (peak {peak})");
+        let early = ((source.sample_rate * 0.25) as usize * source.channels.max(1) as usize)
+            .min(source.data.len());
+        let early_peak = source.data[..early]
+            .iter()
+            .fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(
+            early_peak > 0.05,
+            "dev bank leads with silence (first 250 ms peak {early_peak})"
+        );
+    }
+
+    #[test]
     fn looped_classic_zone_sustains_past_sample_end() {
         let mut s = ZoneSampler::new(48_000.0);
         let mut zone = classic_zone(60, 2_000);

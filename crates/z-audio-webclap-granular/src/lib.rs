@@ -406,6 +406,43 @@ mod tests {
     }
 
     #[test]
+    fn dev_bank_note_renders_audible_output_at_default_params() {
+        // End-to-end: default engine (Position 0.0) + embedded bank, one
+        // note on, the first 200 ms of grains must carry real signal.
+        let (source, _) = dev_bank().expect("embedded bank parses");
+        let mut e = engine::GranularEngine::new(48_000.0);
+        e.set_source(source);
+        e.note_on(60, 0.9);
+        let total = 9_600;
+        let mut left = vec![0.0f32; total];
+        let mut right = vec![0.0f32; total];
+        for (l, r) in left.chunks_mut(128).zip(right.chunks_mut(128)) {
+            e.render(l, r);
+        }
+        let rms = (left.iter().map(|s| s * s).sum::<f32>() / total as f32).sqrt();
+        assert!(rms > 0.005, "granular dev bank is inaudible (rms {rms})");
+    }
+
+    #[test]
+    fn dev_bank_is_audible_at_the_default_position() {
+        // Regression: the embedded bank used to lead with 1.5 s of digital
+        // silence, so grains spawned at the default Position (0.0) read
+        // nothing but zeros and the plugin appeared silent.
+        let (source, _) = dev_bank().expect("embedded bank parses");
+        let peak = source.data.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.5, "dev bank is too quiet (peak {peak})");
+        let early = ((source.sample_rate * 0.25) as usize * source.channels.max(1) as usize)
+            .min(source.data.len());
+        let early_peak = source.data[..early]
+            .iter()
+            .fold(0.0_f32, |m, s| m.max(s.abs()));
+        assert!(
+            early_peak > 0.05,
+            "dev bank leads with silence (first 250 ms peak {early_peak})"
+        );
+    }
+
+    #[test]
     fn param_defaults_round_trip_through_the_id_surface() {
         let p = GranularParams::default();
         for def in param_defs() {
