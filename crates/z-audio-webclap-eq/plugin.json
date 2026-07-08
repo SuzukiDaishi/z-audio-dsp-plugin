@@ -1,11 +1,11 @@
 {
   "manifest_version": 1,
   "id": "dev.zaudio.simple-eq",
-  "name": "Z Audio Simple EQ",
+  "name": "Z Audio EQ",
   "vendor": "zukky",
-  "version": "0.1.0",
-  "description": "A simple 3-band Butterworth EQ built on z-audio-dsp, packaged as a real WCLAP plugin.",
-  "features": ["audio-effect", "equalizer", "eq"],
+  "version": "0.2.0",
+  "description": "Pro-Q-style 8-band parametric EQ: bell/shelf/cut/notch bands, 6-48 dB/oct slopes, per-band Stereo/Mid/Side/L/R placement, band-solo listen, and a real-time pre/post spectrum analyzer.",
+  "features": ["audio-effect", "equalizer", "eq", "stereo"],
   "license": "MIT",
   "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
   "source": "src/",
@@ -13,14 +13,14 @@
   "format": "wasm",
   "has_ui": true,
   "ui": {
-    "compact_size": { "width": 520, "height": 500 },
-    "expanded_size": { "width": 960, "height": 540 }
+    "compact_size": { "width": 920, "height": 560 },
+    "expanded_size": { "width": 1160, "height": 700 }
   },
   "plugins": [
     {
       "id": "dev.zaudio.simple-eq",
-      "name": "Z Audio Simple EQ",
-      "features": ["audio-effect", "equalizer", "eq"],
+      "name": "Z Audio EQ",
+      "features": ["audio-effect", "equalizer", "eq", "stereo"],
       "has_ui": true
     }
   ]

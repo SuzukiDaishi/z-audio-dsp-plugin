@@ -1,250 +1,168 @@
-//! Z Audio Simple EQ, packaged as a real WCLAP audio-effect plugin.
+//! Z Audio EQ — a Pro-Q-style 8-band parametric EQ, packaged as a real
+//! WCLAP audio-effect plugin.
 //!
-//! A thin `wclap-plugin` (see `crates/wclap-plugin`) front end around
-//! `z-audio-dsp::ThreeBandButterworthEq` - three independently switchable
-//! EQ bands (low shelf / bell / high shelf / high-pass / low-pass), exposed
-//! as `clap.params`.
+//! Bands: bell / low shelf / high shelf / low cut / high cut / notch, cut
+//! slopes 6-48 dB/oct, per-band Stereo/Mid/Side/Left/Right placement, and
+//! band-solo listen ("hear just this band's region"). The engine also runs
+//! a pre + post FFT tap and pushes spectrum frames to the UI:
 //!
-//! Sibling to `crates/z-audio-webclap` (the instrument); this one is a pure
-//! audio_in -> audio_out effect with no note input.
+//!   plugin → UI  "ZEQS" u8 kind(0=pre,1=post) u8 0 u16 bins f32 rate
+//!                bins×f32 dB
+//!
+//! Parameter edits ride the standard `{set:[id,value]}` path (ids in
+//! `params.rs`, block 700-773). The original 3-band EQ surface (submodule
+//! ids 40-57) is retired here; the native VST3/CLAP EQ keeps it with its
+//! own UI snapshot under `crates/z-audio-eq-plugin/ui`.
 
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED,
+    init_plugin, send_to_ui, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
 };
-use z_audio_dsp::{
-    ButterworthKind, Effect, ParamId, ParamUnit, ProcessContext, ThreeBandButterworthEq,
-};
+
+pub mod engine;
+pub mod params;
+
+use engine::{apply_param, param_value, EqEngine, SpectrumTap, FFT_BINS};
+use params::param_defs;
 
 static PLUGIN_DEF: PluginDef = PluginDef {
     id: b"dev.zaudio.simple-eq\0",
-    name: b"Z Audio Simple EQ\0",
+    name: b"Z Audio EQ\0",
     vendor: b"zukky\0",
     url: b"https://github.com/SuzukiDaishi/z-audio-dsp\0",
-    version: b"0.1.0\0",
-    description: b"A simple 3-band EQ (low shelf / bell / high shelf / high-pass / low-pass) built on z-audio-dsp\0",
-    features: &[b"audio-effect\0", b"equalizer\0", b"eq\0"],
+    version: b"0.2.0\0",
+    description: b"Pro-Q-style 8-band parametric EQ with band solo and spectrum analyzer\0",
+    features: &[b"audio-effect\0", b"equalizer\0", b"eq\0", b"stereo\0"],
     audio_inputs: 1,
     audio_outputs: 1,
     note_inputs: 0,
     ui_path: Some(b"/ui/index.html\0"),
 };
 
-/// The fifteen `Eq*` parameter ids, in the same order `ParamId::ALL` declares
-/// them. Every other `ParamId` (synth-only: generator/envelope/LFO/etc.)
-/// is irrelevant to a bare EQ effect and excluded.
-fn is_eq_param(id: ParamId) -> bool {
-    matches!(
-        id,
-        ParamId::EqLowEnabled
-            | ParamId::EqLowFreq
-            | ParamId::EqLowType
-            | ParamId::EqMidEnabled
-            | ParamId::EqMidFreq
-            | ParamId::EqMidType
-            | ParamId::EqHighEnabled
-            | ParamId::EqHighFreq
-            | ParamId::EqHighType
-            | ParamId::EqLowGainDb
-            | ParamId::EqLowQ
-            | ParamId::EqMidGainDb
-            | ParamId::EqMidQ
-            | ParamId::EqHighGainDb
-            | ParamId::EqHighQ
-    )
-}
-
-fn build_params() -> Vec<ParamDef> {
-    ParamId::ALL
-        .iter()
-        .copied()
-        .filter(|id| is_eq_param(*id))
-        .map(|id| {
-            let m = id.metadata();
-            let mut name_bytes = m.name.as_bytes().to_vec();
-            name_bytes.push(0);
-            let name: &'static [u8] = Box::leak(name_bytes.into_boxed_slice());
-            let flags = match m.unit {
-                ParamUnit::Enum | ParamUnit::Boolean => PARAM_IS_AUTOMATABLE | PARAM_IS_STEPPED,
-                ParamUnit::Linear | ParamUnit::Hertz | ParamUnit::Seconds => PARAM_IS_AUTOMATABLE,
-            };
-            ParamDef {
-                id: id as u32,
-                flags,
-                name,
-                module: b"\0",
-                min: m.min as f64,
-                max: m.max as f64,
-                default: m.default as f64,
-            }
-        })
-        .collect()
-}
-
 static PARAMS: OnceLock<Vec<ParamDef>> = OnceLock::new();
 
-struct ZAudioSimpleEq {
-    eq: ThreeBandButterworthEq,
-    sample_rate: f32,
-    max_block_size: usize,
+const SPECTRUM_PRE: u8 = 0;
+const SPECTRUM_POST: u8 = 1;
+
+struct ZAudioWebEq {
+    engine: EqEngine,
+    tap_pre: SpectrumTap,
+    tap_post: SpectrumTap,
+    packet: Vec<u8>,
+    ui_seen: bool,
 }
 
-impl ZAudioSimpleEq {
-    fn find_param(id: u32) -> Option<ParamId> {
-        ParamId::ALL
-            .iter()
-            .copied()
-            .find(|p| *p as u32 == id && is_eq_param(*p))
+impl ZAudioWebEq {
+    fn push_spectrum(&mut self, kind: u8) {
+        let tap = if kind == SPECTRUM_PRE {
+            &mut self.tap_pre
+        } else {
+            &mut self.tap_post
+        };
+        if !tap.frame_ready {
+            return;
+        }
+        tap.frame_ready = false;
+
+        self.packet.clear();
+        self.packet.extend_from_slice(b"ZEQS");
+        self.packet.push(kind);
+        self.packet.push(0);
+        self.packet
+            .extend_from_slice(&(FFT_BINS as u16).to_le_bytes());
+        self.packet
+            .extend_from_slice(&self.engine.sample_rate().to_le_bytes());
+        for db in &tap.frame_db {
+            self.packet.extend_from_slice(&db.to_le_bytes());
+        }
+        send_to_ui(&self.packet);
     }
 }
 
-impl Plugin for ZAudioSimpleEq {
+impl Plugin for ZAudioWebEq {
     fn new() -> Self {
-        let mut eq = ThreeBandButterworthEq::new();
-        eq.prepare(48_000.0, 128);
         Self {
-            eq,
-            sample_rate: 48_000.0,
-            max_block_size: 128,
+            engine: EqEngine::new(48_000.0),
+            tap_pre: SpectrumTap::new(),
+            tap_post: SpectrumTap::new(),
+            packet: Vec::with_capacity(16 + FFT_BINS * 4),
+            ui_seen: false,
         }
     }
 
-    fn activate(&mut self, sample_rate: f64, max_frames: u32) {
-        self.sample_rate = sample_rate as f32;
-        self.max_block_size = (max_frames as usize).max(1);
-        self.eq.prepare(self.sample_rate, self.max_block_size);
+    fn activate(&mut self, sample_rate: f64, _max_frames: u32) {
+        let params = *self.engine.params();
+        self.engine = EqEngine::new(sample_rate as f32);
+        self.engine.set_params(params);
     }
 
     fn reset(&mut self) {
-        self.eq.reset();
+        self.engine.reset();
     }
 
     fn params() -> &'static [ParamDef] {
-        PARAMS.get_or_init(build_params)
+        PARAMS.get_or_init(param_defs)
     }
 
     fn get_param(&self, id: u32) -> f64 {
-        match Self::find_param(id) {
-            Some(ParamId::EqLowEnabled) => bool_to_f64(self.eq.low.enabled),
-            Some(ParamId::EqLowFreq) => self.eq.low.frequency_hz as f64,
-            Some(ParamId::EqLowType) => self.eq.low.kind.to_param_value() as f64,
-            Some(ParamId::EqLowGainDb) => self.eq.low.gain_db as f64,
-            Some(ParamId::EqLowQ) => self.eq.low.q as f64,
-            Some(ParamId::EqMidEnabled) => bool_to_f64(self.eq.mid.enabled),
-            Some(ParamId::EqMidFreq) => self.eq.mid.frequency_hz as f64,
-            Some(ParamId::EqMidType) => self.eq.mid.kind.to_param_value() as f64,
-            Some(ParamId::EqMidGainDb) => self.eq.mid.gain_db as f64,
-            Some(ParamId::EqMidQ) => self.eq.mid.q as f64,
-            Some(ParamId::EqHighEnabled) => bool_to_f64(self.eq.high.enabled),
-            Some(ParamId::EqHighFreq) => self.eq.high.frequency_hz as f64,
-            Some(ParamId::EqHighType) => self.eq.high.kind.to_param_value() as f64,
-            Some(ParamId::EqHighGainDb) => self.eq.high.gain_db as f64,
-            Some(ParamId::EqHighQ) => self.eq.high.q as f64,
-            _ => 0.0,
-        }
+        param_value(self.engine.params(), id)
     }
 
     fn set_param(&mut self, id: u32, value: f64) {
-        let Some(param_id) = Self::find_param(id) else {
-            return;
-        };
-        let m = param_id.metadata();
-        let clamped = (value as f32).clamp(m.min, m.max);
-        let flag = value >= 0.5;
-        match param_id {
-            ParamId::EqLowEnabled => self.eq.low.enabled = flag,
-            ParamId::EqLowFreq => self.eq.low.frequency_hz = clamped,
-            ParamId::EqLowType => self.eq.low.kind = ButterworthKind::from_param_value(clamped),
-            ParamId::EqLowGainDb => self.eq.low.gain_db = clamped,
-            ParamId::EqLowQ => self.eq.low.q = clamped,
-            ParamId::EqMidEnabled => self.eq.mid.enabled = flag,
-            ParamId::EqMidFreq => self.eq.mid.frequency_hz = clamped,
-            ParamId::EqMidType => self.eq.mid.kind = ButterworthKind::from_param_value(clamped),
-            ParamId::EqMidGainDb => self.eq.mid.gain_db = clamped,
-            ParamId::EqMidQ => self.eq.mid.q = clamped,
-            ParamId::EqHighEnabled => self.eq.high.enabled = flag,
-            ParamId::EqHighFreq => self.eq.high.frequency_hz = clamped,
-            ParamId::EqHighType => self.eq.high.kind = ButterworthKind::from_param_value(clamped),
-            ParamId::EqHighGainDb => self.eq.high.gain_db = clamped,
-            ParamId::EqHighQ => self.eq.high.q = clamped,
-            _ => {}
+        let mut p = *self.engine.params();
+        apply_param(&mut p, id, value);
+        self.engine.set_params(p);
+    }
+
+    fn on_ui_message(&mut self, bytes: &[u8]) -> bool {
+        if bytes == b"\x65ready" {
+            self.ui_seen = true;
+            return true;
         }
+        false
     }
 
     fn process(&mut self, ctx: &mut ProcessCtx) -> ProcessStatus {
-        let frames = ctx.frames();
-        if frames == 0 {
-            return ProcessStatus::Continue;
-        }
-
         match ctx.stereo_io() {
             Some(io) => {
-                let wclap_plugin::StereoIo {
-                    input_l,
-                    input_r,
-                    output_l,
-                    output_r,
-                } = io;
-                output_l.copy_from_slice(input_l);
-                output_r.copy_from_slice(input_r);
-                let events = [];
-                let process_ctx = ProcessContext::new(self.sample_rate, frames, 120.0, &events);
-                self.eq.process_stereo(&process_ctx, output_l, output_r);
+                if self.ui_seen {
+                    self.tap_pre.push(io.input_l, io.input_r);
+                }
+                self.engine
+                    .process(io.input_l, io.input_r, io.output_l, io.output_r);
+                if self.ui_seen {
+                    self.tap_post.push(io.output_l, io.output_r);
+                    self.push_spectrum(SPECTRUM_PRE);
+                    self.push_spectrum(SPECTRUM_POST);
+                }
             }
             None => silence(ctx),
         }
-
         ProcessStatus::Continue
-    }
-}
-
-fn bool_to_f64(value: bool) -> f64 {
-    if value {
-        1.0
-    } else {
-        0.0
     }
 }
 
 #[no_mangle]
 pub extern "C" fn _initialize() {
-    init_plugin::<ZAudioSimpleEq>(&PLUGIN_DEF);
+    init_plugin::<ZAudioWebEq>(&PLUGIN_DEF);
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::engine::{apply_param, param_value};
+    use super::params::param_defs;
 
     #[test]
-    fn exposes_all_eq_params_including_gain_and_q() {
-        let ids: Vec<_> = ZAudioSimpleEq::params()
-            .iter()
-            .map(|param| param.id)
-            .collect();
-
-        assert_eq!(ids.len(), 15);
-        for id in [
-            ParamId::EqLowGainDb,
-            ParamId::EqLowQ,
-            ParamId::EqMidGainDb,
-            ParamId::EqMidQ,
-            ParamId::EqHighGainDb,
-            ParamId::EqHighQ,
-        ] {
-            assert!(ids.contains(&(id as u32)));
+    fn set_get_round_trips_across_the_surface() {
+        let mut p = crate::engine::EqParams::default();
+        for def in param_defs() {
+            apply_param(&mut p, def.id, def.max);
+            assert!(
+                (param_value(&p, def.id) - def.max).abs() < 1e-6,
+                "id {} did not round-trip",
+                def.id
+            );
         }
-    }
-
-    #[test]
-    fn gain_and_q_round_trip_through_webclap_params() {
-        let mut plugin = ZAudioSimpleEq::new();
-
-        plugin.set_param(ParamId::EqMidGainDb as u32, 6.5);
-        plugin.set_param(ParamId::EqMidQ as u32, 2.25);
-
-        assert_eq!(plugin.get_param(ParamId::EqMidGainDb as u32), 6.5);
-        assert_eq!(plugin.get_param(ParamId::EqMidQ as u32), 2.25);
     }
 }

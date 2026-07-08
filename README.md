@@ -5,7 +5,10 @@ Audio plugin wrappers and packaging for `z-audio-dsp`.
 This workspace builds native and WebCLAP wrappers for:
 
 - `Z Audio Simple Synth`: MIDI note input to stereo audio output
-- `Z Audio Simple EQ`: mono/stereo audio input to audio output
+- `Z Audio EQ`: Pro-Q-style 8-band parametric EQ (bell/shelf/cut/notch,
+  6-48 dB/oct slopes, per-band Stereo/Mid/Side/L/R placement, band-solo
+  listen, pre/post spectrum analyzer) as WebCLAP; the native VST3/CLAP
+  build remains the original 3-band Simple EQ with its own UI snapshot
 - `Z Audio Formula Piano`: modal/formula piano instrument
 - `Z Audio VCSL Piano`: sampler piano built from VCSL Keys "Grand Piano, K"
 - `Z Audio Sampler`: multi-zone sampler with GUI file loading and
@@ -210,9 +213,13 @@ plugin-specific visualization front and center:
 
 - **Simple Synth** — live scopes for the oscillator shape, amp envelope,
   and LFO that track the controls.
-- **Simple EQ** — a log-frequency response editor with draggable band
-  nodes (drag = freq/gain, wheel = Q, double-click = band on/off); the
-  plotted curves are exact RBJ biquad responses.
+- **EQ** — a Pro-Q-style editor: real-time pre/post spectrum analyzer
+  behind the summed curve, double-click to add one of 8 bands, drag its
+  colored dot (freq/gain), wheel for Q, double-click the dot to remove.
+  The panel picks the band type (bell / lo-hi shelf / lo-hi cut / notch),
+  cut slope (6/12/24/48 dB/oct), Stereo/Mid/Side/L/R placement, and a
+  SOLO that plays only that band's region. All plotted curves are the
+  exact RBJ responses the wasm engine runs.
 - **Compressor** — a soft-knee transfer curve you can drag (threshold /
   ratio) and wheel (knee), with gain-reduction shading.
 - **Limiter** — a brickwall transfer curve with draggable threshold and
@@ -330,7 +337,7 @@ two sliders are inactive.
 | Plugin | CLAP ID | VST3 Class ID | WebCLAP bundle |
 | --- | --- | --- | --- |
 | Z Audio Simple Synth | `dev.zaudio.simple-synth` | `ZAudioSmplSynth1` | `z-audio-simple-synth.wclap.tar.gz` |
-| Z Audio Simple EQ | `dev.zaudio.simple-eq` | `ZAudioSimpleEQ01` | `z-audio-simple-eq.wclap.tar.gz` |
+| Z Audio EQ (WebCLAP) / Simple EQ (native) | `dev.zaudio.simple-eq` | `ZAudioSimpleEQ01` | `z-audio-simple-eq.wclap.tar.gz` |
 | Z Audio Formula Piano | `dev.zaudio.formula-piano` | `ZAudioFormulaPno` | `z-audio-formula-piano.wclap.tar.gz` |
 | Z Audio VCSL Piano | `dev.zaudio.vcsl-piano` | `ZAudioVCSLPiano1` | `z-audio-vcsl-piano.wclap.tar.gz` |
 | Z Audio Sampler | `dev.zaudio.sampler` | `ZAudioSamplerMZ1` | `z-audio-sampler.wclap.tar.gz` |
