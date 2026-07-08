@@ -1,0 +1,13 @@
+[package]
+name = "z-audio-webclap-gate"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+description = "Noise gate with hold and range, packaged as a WCLAP plugin."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wclap-plugin = { path = "../wclap-plugin", default-features = false }

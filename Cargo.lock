@@ -4966,11 +4966,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-webclap-chorus"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
 name = "z-audio-webclap-compressor"
 version = "0.1.0"
 dependencies = [
  "wclap-plugin",
  "z-audio-dsp",
+]
+
+[[package]]
+name = "z-audio-webclap-delay"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
 ]
 
 [[package]]
@@ -5005,6 +5019,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-webclap-flanger"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
+name = "z-audio-webclap-gate"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
 name = "z-audio-webclap-granular"
 version = "0.1.0"
 dependencies = [
@@ -5018,6 +5046,13 @@ version = "0.1.0"
 dependencies = [
  "wclap-plugin",
  "z-audio-dsp",
+]
+
+[[package]]
+name = "z-audio-webclap-phaser"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
 ]
 
 [[package]]
@@ -5054,6 +5089,13 @@ dependencies = [
 
 [[package]]
 name = "z-audio-webclap-saturator"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
+name = "z-audio-webclap-tremolo"
 version = "0.1.0"
 dependencies = [
  "wclap-plugin",

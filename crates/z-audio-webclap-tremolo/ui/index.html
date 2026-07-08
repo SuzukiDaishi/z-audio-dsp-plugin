@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" style="--accent: #7ae04a; --accent-soft: rgba(122, 224, 74, 0.16)">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z Audio Tremolo</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>Tremolo</h1>
+          <p class="eyebrow">Z AUDIO EFFECT</p>
+        </div>
+        <div class="header-right">
+          <span class="header-note">drag: rate (←→) / depth (↑↓)</span>
+          <span id="status">Waiting for host</span>
+        </div>
+      </header>
+
+      <div class="viz" style="min-height: 120px">
+        <canvas id="viz" title="Drag: LFO rate (←→) / depth (↑↓)"></canvas>
+        <span class="viz-caption">LFO gain · L / R</span>
+      </div>
+
+      <div class="panels cols-2">
+        <section class="section" id="sec-lfo">
+          <h2 class="section-title">LFO</h2>
+        </section>
+        <section class="section" id="sec-output">
+          <h2 class="section-title">Output</h2>
+        </section>
+      </div>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

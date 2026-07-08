@@ -27,6 +27,13 @@ This workspace builds native and WebCLAP wrappers for:
 - `Z Audio Saturator`: warm level-compensated saturation with tilt tone,
   WebCLAP only
 - `Z Audio Bitcrusher`: bit-depth + sample-rate reduction, WebCLAP only
+- `Z Audio Delay`: stereo delay with ping-pong and feedback damping,
+  WebCLAP only
+- `Z Audio Chorus`: multi-voice stereo chorus, WebCLAP only
+- `Z Audio Flanger`: stereo flanger with bipolar feedback, WebCLAP only
+- `Z Audio Phaser`: 2-12 stage stereo phaser, WebCLAP only
+- `Z Audio Tremolo`: tremolo / auto-pan with stereo LFO phase, WebCLAP only
+- `Z Audio Gate`: noise gate with hold and range, WebCLAP only
 
 Supported plugin formats:
 
@@ -239,6 +246,18 @@ plugin-specific visualization front and center:
   (↑↓) and warmth/asymmetry (←→).
 - **Bitcrusher** — a reference sine run through the exact quantize +
   sample-and-hold; drag for downsample (←→) and bit depth (↑↓).
+- **Delay** — a decaying echo-tap timeline for L/R; drag for time (←→)
+  and feedback (↑↓).
+- **Chorus** — the per-voice delay-modulation LFO curves; drag for rate
+  (←→) and depth (↑↓).
+- **Flanger** — the comb-filter response at the sweep center; drag for
+  manual delay (←→) and bipolar feedback (↑↓).
+- **Phaser** — the notch response of the allpass cascade; drag for
+  center (←→) and depth (↑↓).
+- **Tremolo** — the L/R gain LFOs over one cycle; drag for rate (←→)
+  and depth (↑↓).
+- **Gate** — the input/output transfer curve with the threshold line;
+  drag for threshold (←→) and range (↑↓).
 - **Wave Synth** — Serum-style panels built from rotary knobs (vertical
   drag, Shift = fine, wheel, double-click = default) and directly
   editable canvases: each oscillator draws a pseudo-3D stack of its
@@ -350,6 +369,12 @@ two sliders are inactive.
 | Z Audio Distortion | `dev.zaudio.distortion` | — (WebCLAP only) | `z-audio-distortion.wclap.tar.gz` |
 | Z Audio Saturator | `dev.zaudio.saturator` | — (WebCLAP only) | `z-audio-saturator.wclap.tar.gz` |
 | Z Audio Bitcrusher | `dev.zaudio.bitcrusher` | — (WebCLAP only) | `z-audio-bitcrusher.wclap.tar.gz` |
+| Z Audio Delay | `dev.zaudio.delay` | — (WebCLAP only) | `z-audio-delay.wclap.tar.gz` |
+| Z Audio Chorus | `dev.zaudio.chorus` | — (WebCLAP only) | `z-audio-chorus.wclap.tar.gz` |
+| Z Audio Flanger | `dev.zaudio.flanger` | — (WebCLAP only) | `z-audio-flanger.wclap.tar.gz` |
+| Z Audio Phaser | `dev.zaudio.phaser` | — (WebCLAP only) | `z-audio-phaser.wclap.tar.gz` |
+| Z Audio Tremolo | `dev.zaudio.tremolo` | — (WebCLAP only) | `z-audio-tremolo.wclap.tar.gz` |
+| Z Audio Gate | `dev.zaudio.gate` | — (WebCLAP only) | `z-audio-gate.wclap.tar.gz` |
 
 ## Parameters
 
