@@ -89,6 +89,30 @@ const WEBCLAP_BUNDLES: &[WebClapBundle] = &[
         crate_dir: "crates/z-audio-webclap-compressor",
         wasm_file: "z_audio_webclap_compressor.wasm",
     },
+    WebClapBundle {
+        package: "z-audio-webclap-ringmod",
+        bundle_name: "z-audio-ring-mod.wclap",
+        crate_dir: "crates/z-audio-webclap-ringmod",
+        wasm_file: "z_audio_webclap_ringmod.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-distortion",
+        bundle_name: "z-audio-distortion.wclap",
+        crate_dir: "crates/z-audio-webclap-distortion",
+        wasm_file: "z_audio_webclap_distortion.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-saturator",
+        bundle_name: "z-audio-saturator.wclap",
+        crate_dir: "crates/z-audio-webclap-saturator",
+        wasm_file: "z_audio_webclap_saturator.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-bitcrusher",
+        bundle_name: "z-audio-bitcrusher.wclap",
+        crate_dir: "crates/z-audio-webclap-bitcrusher",
+        wasm_file: "z_audio_webclap_bitcrusher.wasm",
+    },
 ];
 
 fn main() -> nih_plug_xtask::Result<()> {

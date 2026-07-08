@@ -17,6 +17,13 @@ This workspace builds native and WebCLAP wrappers for:
 - `Z Audio Parametric Reverb`: stereo FDN reverb effect
 - `Z Audio Limiter`: stereo lookahead limiter effect
 - `Z Audio Compressor`: stereo feed-forward compressor effect
+- `Z Audio Ring Mod`: ring modulator with a sine/tri/saw/square carrier,
+  WebCLAP only
+- `Z Audio Distortion`: waveshaping distortion (soft/hard/fold/asym) with
+  tone control, WebCLAP only
+- `Z Audio Saturator`: warm level-compensated saturation with tilt tone,
+  WebCLAP only
+- `Z Audio Bitcrusher`: bit-depth + sample-rate reduction, WebCLAP only
 
 Supported plugin formats:
 
@@ -217,6 +224,14 @@ plugin-specific visualization front and center:
   drag to reshape size/diffusion.
 - **VCSL Piano** — a draggable velocity→loudness response curve.
 - **Sampler** — see the sampler section above.
+- **Ring Mod** — the carrier multiplied against a reference sine; drag
+  for carrier frequency (←→) and mix (↑↓).
+- **Distortion** — the exact waveshaper transfer curve (soft / hard /
+  fold / asym); drag vertically for drive.
+- **Saturator** — the level-compensated saturation curve; drag for drive
+  (↑↓) and warmth/asymmetry (←→).
+- **Bitcrusher** — a reference sine run through the exact quantize +
+  sample-and-hold; drag for downsample (←→) and bit depth (↑↓).
 - **Wave Synth** — Serum-style panels built from rotary knobs (vertical
   drag, Shift = fine, wheel, double-click = default) and directly
   editable canvases: each oscillator draws a pseudo-3D stack of its
@@ -324,6 +339,10 @@ two sliders are inactive.
 | Z Audio Parametric Reverb | `dev.zaudio.parametric-reverb` | `ZAudioParaReverb` | `z-audio-parametric-reverb.wclap.tar.gz` |
 | Z Audio Limiter | `dev.zaudio.limiter` | `ZAudioLimiter000` | `z-audio-limiter.wclap.tar.gz` |
 | Z Audio Compressor | `dev.zaudio.compressor` | `ZAudioCompressor` | `z-audio-compressor.wclap.tar.gz` |
+| Z Audio Ring Mod | `dev.zaudio.ringmod` | — (WebCLAP only) | `z-audio-ring-mod.wclap.tar.gz` |
+| Z Audio Distortion | `dev.zaudio.distortion` | — (WebCLAP only) | `z-audio-distortion.wclap.tar.gz` |
+| Z Audio Saturator | `dev.zaudio.saturator` | — (WebCLAP only) | `z-audio-saturator.wclap.tar.gz` |
+| Z Audio Bitcrusher | `dev.zaudio.bitcrusher` | — (WebCLAP only) | `z-audio-bitcrusher.wclap.tar.gz` |
 
 ## Parameters
 
