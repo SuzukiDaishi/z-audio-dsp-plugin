@@ -352,9 +352,14 @@ can reuse the engine later). Web param ids are the 500 block:
   resonance, drive, key tracking, dry/wet mix, and per-oscillator routing
 - Env 1 (amp) and Env 2: ADSR plus a shared curve control
 - LFO 1/2: sine/tri/saw/square/S&H, 0.01-20 Hz, start phase, retrigger
-- Mod matrix: 8 slots of source (Env 2, LFO 1/2, velocity, note) →
+- Mod matrix: 8 slots of source (Env 1/2, LFO 1/2, velocity, note) →
   destination (WT pos / pitch / level / pan per osc, cutoff, resonance,
-  master) → bipolar amount; every slot field is host-automatable
+  master) → bipolar amount; every slot field is host-automatable.
+  Assignments are made Serum-style in the UI: drag a source chip
+  (ENV 1/2, LFO 1/2, VEL, NOTE) onto a knob or canvas, drag the colored
+  ring around a modulated knob to set the depth, and double-click the
+  ring to remove the connection. The matrix list mirrors the same slots
+  for fine editing.
 - Global: master, polyphony (1-16), pitch-bend range (declared; WebCLAP
   hosts don't deliver bend events yet), glide
 

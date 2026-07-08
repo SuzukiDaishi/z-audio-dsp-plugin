@@ -69,14 +69,16 @@ pub const MOD_DEST: u32 = 1;
 pub const MOD_AMOUNT: u32 = 2;
 pub const MOD_FIELDS: u32 = 3;
 
-/// Mod sources, in stepped-parameter order.
+/// Mod sources, in stepped-parameter order. Env 1 (the amp envelope) was
+/// appended after the original set so existing presets keep their meaning.
 pub const SRC_NONE: usize = 0;
 pub const SRC_ENV2: usize = 1;
 pub const SRC_LFO1: usize = 2;
 pub const SRC_LFO2: usize = 3;
 pub const SRC_VELOCITY: usize = 4;
 pub const SRC_NOTE: usize = 5;
-pub const SRC_COUNT: usize = 6;
+pub const SRC_ENV1: usize = 6;
+pub const SRC_COUNT: usize = 7;
 
 /// Mod destinations, in stepped-parameter order.
 pub const DST_NONE: usize = 0;

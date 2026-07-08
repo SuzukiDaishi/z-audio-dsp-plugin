@@ -837,6 +837,7 @@ impl SynthEngine {
                     continue;
                 }
                 let src = match slot.source as usize {
+                    SRC_ENV1 => voice.env1.level,
                     SRC_ENV2 => voice.env2.level,
                     SRC_LFO1 => lfo1,
                     SRC_LFO2 => lfo2,

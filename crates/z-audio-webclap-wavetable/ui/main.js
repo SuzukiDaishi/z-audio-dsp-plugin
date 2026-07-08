@@ -65,7 +65,16 @@ const P = {
 };
 
 const TABLE_NAMES = ["Basic Shapes", "PWM", "Harmonic Sweep", "Metal Bell"];
-const MOD_SOURCES = ["None", "Env 2", "LFO 1", "LFO 2", "Velocity", "Note"];
+const MOD_SOURCES = ["None", "Env 2", "LFO 1", "LFO 2", "Velocity", "Note", "Env 1"];
+const MOD_COLORS = [
+  "#7e93a3", // none (unused)
+  "#ff8a5c", // env 2
+  "#5cc8ff", // lfo 1
+  "#c19bff", // lfo 2
+  "#9dffb0", // velocity
+  "#ff9bd4", // note
+  "#f6c945", // env 1
+];
 const MOD_DESTS = [
   "None",
   "A WT Pos",
@@ -182,6 +191,71 @@ function applySnapshot(map) {
   invalidate();
 }
 
+// --- Mod assignments (Serum-style: sources connect to parameters) -----------
+//
+// The 8 mod-matrix slots stay the storage model; drag-to-assign just writes
+// the same slot params, so the matrix list view and presets stay in sync.
+
+/** Engaged slots targeting `dest`: [{ base, src, amount }]. */
+function modsForDest(dest) {
+  const out = [];
+  for (let s = 0; s < P.MOD_SLOTS; s++) {
+    const base = P.MOD_BASE + s * P.MOD_FIELDS;
+    const src = Math.round(val(base));
+    if (src > 0 && Math.round(val(base + 1)) === dest) {
+      out.push({ base, src, amount: val(base + 2) });
+    }
+  }
+  return out;
+}
+
+/**
+ * Connects `src` to `dest`, reusing an identical pair or claiming the first
+ * free slot. Returns the slot base id, or -1 when the matrix is full.
+ */
+function assignMod(src, dest) {
+  for (let s = 0; s < P.MOD_SLOTS; s++) {
+    const base = P.MOD_BASE + s * P.MOD_FIELDS;
+    if (Math.round(val(base)) === src && Math.round(val(base + 1)) === dest) {
+      if (val(base + 2) === 0) setParam(base + 2, 0.5);
+      return base;
+    }
+  }
+  for (let s = 0; s < P.MOD_SLOTS; s++) {
+    const base = P.MOD_BASE + s * P.MOD_FIELDS;
+    if (Math.round(val(base)) === 0 || Math.round(val(base + 1)) === 0) {
+      setParam(base, src);
+      setParam(base + 1, dest);
+      setParam(base + 2, 0.5);
+      return base;
+    }
+  }
+  return -1;
+}
+
+/** Clears one mod slot back to None/None/0. */
+function clearMod(base) {
+  setParam(base, 0);
+  setParam(base + 1, 0);
+  setParam(base + 2, 0);
+}
+
+/** Live source value for ring animation (null for velocity/note). */
+function liveModValue(src) {
+  switch (src) {
+    case 1:
+      return state.env2;
+    case 2:
+      return state.lfo1;
+    case 3:
+      return state.lfo2;
+    case 6:
+      return state.env1;
+    default:
+      return null;
+  }
+}
+
 // --- Redraw scheduling --------------------------------------------------------------
 
 let redrawQueued = false;
@@ -214,12 +288,15 @@ function hideTip() {
 
 // --- Knob component -----------------------------------------------------------------
 //
-// def: { id, label, min, max, default, fmt?, step?, scale?, bipolar?, small? }
+// def: { id, label, min, max, default, fmt?, step?, scale?, bipolar?, small?, dest? }
 // Vertical drag (Shift = fine), wheel, double-click = default.
+// `dest` marks the knob as a mod destination: it accepts source-chip drops,
+// draws one ring per assignment, and the ring region drags the mod depth.
 
 function makeKnob(def) {
   const root = document.createElement("div");
   root.className = `knob${def.small ? " small" : ""}`;
+  if (def.dest) root.dataset.dest = String(def.dest);
   const canvas = document.createElement("canvas");
   const label = document.createElement("span");
   label.className = "knob-label";
@@ -289,6 +366,36 @@ function makeKnob(def) {
     ctx.lineWidth = size * 0.055;
     ctx.strokeStyle = accent;
     ctx.stroke();
+
+    // Mod rings: one arc per assignment, from the value to its mod reach,
+    // plus a live dot riding the source (Serum-style).
+    if (def.dest) {
+      const mods = modsForDest(def.dest);
+      for (let i = 0; i < mods.length; i++) {
+        const m = mods[i];
+        const color = MOD_COLORS[m.src] || accent;
+        const rr = r * (0.78 - i * 0.2);
+        if (rr <= r * 0.2) break;
+        const a0 = start + sweep * t;
+        const a1 = start + sweep * clamp(t + m.amount, 0, 1);
+        ctx.beginPath();
+        ctx.arc(c, c, rr, Math.min(a0, a1), Math.max(a0, a1));
+        ctx.lineWidth = size * 0.045;
+        ctx.lineCap = "round";
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.85;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+
+        const live = liveModValue(m.src);
+        const dotT = clamp(t + m.amount * (live == null ? 0 : live), 0, 1);
+        const dotA = start + sweep * dotT;
+        ctx.beginPath();
+        ctx.arc(c + Math.cos(dotA) * rr, c + Math.sin(dotA) * rr, size * 0.035, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+      }
+    }
   }
 
   function emit(v) {
@@ -298,34 +405,73 @@ function makeKnob(def) {
     invalidate();
   }
 
+  // The ring region (outside the knob body) drags the depth of the first
+  // assignment targeting this knob; the body drags the value itself.
+  const ringModAt = (e) => {
+    if (!def.dest) return null;
+    const rect = canvas.getBoundingClientRect();
+    const dist = Math.hypot(
+      e.clientX - (rect.left + rect.width / 2),
+      e.clientY - (rect.top + rect.height / 2),
+    );
+    if (dist / rect.width <= 0.3) return null;
+    const mods = modsForDest(def.dest);
+    return mods.length ? mods[0] : null;
+  };
+  const modTip = (e, m) =>
+    showTip(
+      e.clientX,
+      e.clientY,
+      `${MOD_SOURCES[m.src]} → ${def.label}: ${Math.round(val(m.base + 2) * 100)} %`,
+    );
+
   let dragNorm = 0;
   let dragY = 0;
+  let modDrag = null; // { base, amount }
   canvas.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     canvas.setPointerCapture(e.pointerId);
+    dragY = e.clientY;
+    const m = ringModAt(e);
+    if (m) {
+      modDrag = { base: m.base, amount: m.amount };
+      root.classList.add("mod-dragging-ring");
+      modTip(e, m);
+      return;
+    }
     root.classList.add("dragging");
     dragNorm = toNorm(def, value);
-    dragY = e.clientY;
     showTip(e.clientX, e.clientY, `${def.label}: ${format(value)}`);
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (root.classList.contains("dragging")) {
+    if (modDrag) {
+      const range = e.shiftKey ? 1600 : 160;
+      modDrag.amount = clamp(modDrag.amount + (dragY - e.clientY) / range, -1, 1);
+      dragY = e.clientY;
+      setParam(modDrag.base + 2, modDrag.amount);
+      modTip(e, { base: modDrag.base, src: Math.round(val(modDrag.base)) });
+      draw();
+    } else if (root.classList.contains("dragging")) {
       const range = e.shiftKey ? 1600 : 160;
       dragNorm = clamp(dragNorm + (dragY - e.clientY) / range, 0, 1);
       dragY = e.clientY;
       emit(fromNorm(def, dragNorm));
       showTip(e.clientX, e.clientY, `${def.label}: ${format(value)}`);
     } else if (e.buttons === 0) {
-      showTip(e.clientX, e.clientY, `${def.label}: ${format(value)}`);
+      const m = ringModAt(e);
+      if (m) modTip(e, m);
+      else showTip(e.clientX, e.clientY, `${def.label}: ${format(value)}`);
     }
   });
   canvas.addEventListener("pointerup", (e) => {
     canvas.releasePointerCapture(e.pointerId);
     root.classList.remove("dragging");
+    root.classList.remove("mod-dragging-ring");
+    modDrag = null;
     hideTip();
   });
   canvas.addEventListener("pointerleave", () => {
-    if (!root.classList.contains("dragging")) hideTip();
+    if (!root.classList.contains("dragging") && !modDrag) hideTip();
   });
   canvas.addEventListener("wheel", (e) => {
     e.preventDefault();
@@ -338,9 +484,25 @@ function makeKnob(def) {
     emit(fromNorm(def, t));
     showTip(e.clientX, e.clientY, `${def.label}: ${format(value)}`);
   });
-  canvas.addEventListener("dblclick", () => emit(def.default));
+  canvas.addEventListener("dblclick", (e) => {
+    const m = ringModAt(e);
+    if (m) {
+      clearMod(m.base);
+      draw();
+      hideTip();
+      return;
+    }
+    emit(def.default);
+  });
 
   requestAnimationFrame(draw);
+  // Live mod-ring animation rides the shared invalidate() pass (driven by
+  // the ~30 Hz meter packets) but only when this knob is modulated.
+  if (def.dest) {
+    redrawFns.push(() => {
+      if (modsForDest(def.dest).length) draw();
+    });
+  }
   register(def, {
     get: () => value,
     set: (v) => {
@@ -475,18 +637,19 @@ function buildOsc(base, prefix) {
     })(),
   );
   const knobs = $id(`${prefix}-knobs`);
+  const isA = base === P.OSC_A;
   const defs = [
-    { id: at(P.WT_POS), label: "WT Pos", min: 0, max: 1, default: 0, fmt: fmt.pct },
+    { id: at(P.WT_POS), label: "WT Pos", min: 0, max: 1, default: 0, fmt: fmt.pct, dest: isA ? 1 : 5 },
     { id: at(P.UNISON), label: "Unison", min: 1, max: 8, default: 1, step: 1, fmt: fmt.int },
     { id: at(P.UNI_DETUNE), label: "Detune", min: 0, max: 1, default: 0.25, fmt: fmt.pct },
     { id: at(P.UNI_BLEND), label: "Blend", min: 0, max: 1, default: 0.75, fmt: fmt.pct },
     { id: at(P.PHASE), label: "Phase", min: 0, max: 1, default: 0, fmt: fmt.pct },
     { id: at(P.RAND_PHASE), label: "Rand", min: 0, max: 1, default: 1, fmt: fmt.pct },
     { id: at(P.OCTAVE), label: "Oct", min: -4, max: 4, default: 0, step: 1, bipolar: true, fmt: fmt.int },
-    { id: at(P.SEMI), label: "Semi", min: -12, max: 12, default: 0, step: 1, bipolar: true, fmt: fmt.int },
+    { id: at(P.SEMI), label: "Semi", min: -12, max: 12, default: 0, step: 1, bipolar: true, fmt: fmt.int, dest: isA ? 2 : 6 },
     { id: at(P.FINE), label: "Fine", min: -100, max: 100, default: 0, bipolar: true, fmt: fmtCt },
-    { id: at(P.PAN), label: "Pan", min: -1, max: 1, default: 0, bipolar: true, fmt: fmtPan },
-    { id: at(P.LEVEL), label: "Level", min: 0, max: 1, default: 0.75, fmt: fmt.pct },
+    { id: at(P.PAN), label: "Pan", min: -1, max: 1, default: 0, bipolar: true, fmt: fmtPan, dest: isA ? 4 : 8 },
+    { id: at(P.LEVEL), label: "Level", min: 0, max: 1, default: 0.75, fmt: fmt.pct, dest: isA ? 3 : 7 },
   ];
   for (const def of defs) {
     knobs.append(makeKnob({ ...def, small: true }));
@@ -509,8 +672,8 @@ $id("filter-type").append(
   }),
 );
 for (const def of [
-  { id: P.CUTOFF, label: "Cutoff", min: 20, max: 20000, default: 20000, scale: "log", fmt: fmt.hz },
-  { id: P.RESO, label: "Reso", min: 0, max: 1, default: 0.15, fmt: fmt.pct },
+  { id: P.CUTOFF, label: "Cutoff", min: 20, max: 20000, default: 20000, scale: "log", fmt: fmt.hz, dest: 9 },
+  { id: P.RESO, label: "Reso", min: 0, max: 1, default: 0.15, fmt: fmt.pct, dest: 10 },
   { id: P.DRIVE, label: "Drive", min: 0, max: 1, default: 0, fmt: fmt.pct },
   { id: P.KEYTRACK, label: "Keytrk", min: 0, max: 1, default: 0, fmt: fmt.pct },
   { id: P.FILTER_MIX, label: "Mix", min: 0, max: 1, default: 1, fmt: fmt.pct },
@@ -579,7 +742,7 @@ buildLfo(P.LFO1, "lfo1");
 buildLfo(P.LFO2, "lfo2");
 
 $id("master-mount").append(
-  makeKnob({ id: P.MASTER, label: "Master", min: 0, max: 1, default: 0.8, fmt: fmt.pct }),
+  makeKnob({ id: P.MASTER, label: "Master", min: 0, max: 1, default: 0.8, fmt: fmt.pct, dest: 11 }),
 );
 for (const def of [
   { id: P.POLYPHONY, label: "Voices", min: 1, max: 16, default: 8, step: 1, fmt: fmt.int },
@@ -687,6 +850,91 @@ function buildMatrix() {
 
 buildMatrix();
 
+// --- Drag-to-assign (Serum-style source chips) ------------------------------
+//
+// Pointer-drag a source chip onto anything with data-dest (knobs, the osc
+// wave views, the filter view) to connect it through the mod matrix.
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function beginModDrag(chip, src, event) {
+  event.preventDefault();
+  chip.setPointerCapture(event.pointerId);
+  document.body.classList.add("mod-drag");
+
+  const color = MOD_COLORS[src] || css("--accent");
+  const overlay = document.createElementNS(SVG_NS, "svg");
+  overlay.setAttribute("class", "mod-drag-overlay");
+  const line = document.createElementNS(SVG_NS, "line");
+  line.setAttribute("stroke", color);
+  line.setAttribute("stroke-width", "2");
+  line.setAttribute("stroke-dasharray", "6 4");
+  const dot = document.createElementNS(SVG_NS, "circle");
+  dot.setAttribute("r", "5");
+  dot.setAttribute("fill", color);
+  overlay.append(line, dot);
+  document.body.append(overlay);
+
+  const rect = chip.getBoundingClientRect();
+  const x0 = rect.left + rect.width / 2;
+  const y0 = rect.top + rect.height / 2;
+  line.setAttribute("x1", String(x0));
+  line.setAttribute("y1", String(y0));
+
+  let hover = null;
+  const targetAt = (e) => {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    return el && el.closest ? el.closest("[data-dest]") : null;
+  };
+  const track = (e) => {
+    line.setAttribute("x2", String(e.clientX));
+    line.setAttribute("y2", String(e.clientY));
+    dot.setAttribute("cx", String(e.clientX));
+    dot.setAttribute("cy", String(e.clientY));
+    const target = targetAt(e);
+    if (target !== hover) {
+      if (hover) hover.classList.remove("mod-drop-hover");
+      hover = target;
+      if (hover) hover.classList.add("mod-drop-hover");
+    }
+  };
+  track(event);
+
+  const finish = (e) => {
+    if (chip.hasPointerCapture?.(e.pointerId)) chip.releasePointerCapture(e.pointerId);
+    overlay.remove();
+    document.body.classList.remove("mod-drag");
+    if (hover) hover.classList.remove("mod-drop-hover");
+    chip.removeEventListener("pointermove", track);
+    chip.removeEventListener("pointerup", drop);
+    chip.removeEventListener("pointercancel", finish);
+  };
+  const drop = (e) => {
+    const target = targetAt(e);
+    finish(e);
+    if (!target) return;
+    const dest = Number(target.dataset.dest);
+    const base = assignMod(src, dest);
+    showTip(
+      e.clientX,
+      e.clientY,
+      base < 0
+        ? "Mod matrix full (8 slots)"
+        : `${MOD_SOURCES[src]} → ${MOD_DESTS[dest]}: ${Math.round(val(base + 2) * 100)} %`,
+    );
+    setTimeout(hideTip, 1400);
+  };
+  chip.addEventListener("pointermove", track);
+  chip.addEventListener("pointerup", drop);
+  chip.addEventListener("pointercancel", finish);
+}
+
+for (const chip of document.querySelectorAll(".mod-chip")) {
+  const src = Number(chip.dataset.src);
+  chip.style.setProperty("--chip-color", MOD_COLORS[src] || "#7e93a3");
+  chip.addEventListener("pointerdown", (e) => beginModDrag(chip, src, e));
+}
+
 // --- Live packet state --------------------------------------------------------------------
 
 const state = {
@@ -783,6 +1031,7 @@ function drawOscStack(canvas, oscIndex, base) {
 function wireOscCanvas(canvasId, base) {
   const canvas = $id(canvasId);
   const oscIndex = base === P.OSC_A ? 0 : 1;
+  canvas.dataset.dest = base === P.OSC_A ? "1" : "5"; // drop target: WT Pos
   const view = setupCanvas(canvas, () => drawOscStack(canvas, oscIndex, base));
   redrawFns.push(view.redraw);
 
@@ -887,6 +1136,7 @@ function drawFilter(canvas) {
 
 {
   const canvas = $id("viz-filter");
+  canvas.dataset.dest = "9"; // drop target: Cutoff
   const view = setupCanvas(canvas, () => drawFilter(canvas));
   redrawFns.push(view.redraw);
 
