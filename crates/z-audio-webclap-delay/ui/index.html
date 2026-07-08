@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" style="--accent: #7dd87a; --accent-soft: rgba(125, 216, 122, 0.16)">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z Audio Delay</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>Delay</h1>
+          <p class="eyebrow">Z AUDIO EFFECT</p>
+        </div>
+        <div class="header-right">
+          <span class="header-note">drag: time L (←→) / feedback (↑↓)</span>
+          <span id="status">Waiting for host</span>
+        </div>
+      </header>
+
+      <div class="viz" style="min-height: 120px">
+        <canvas id="viz" title="Drag: time L (←→) / feedback (↑↓)"></canvas>
+        <span class="viz-caption">Echo taps L / R</span>
+      </div>
+
+      <div class="panels cols-2">
+        <section class="section" id="sec-time">
+          <h2 class="section-title">Time</h2>
+        </section>
+        <section class="section" id="sec-feedback">
+          <h2 class="section-title">Feedback &amp; Mix</h2>
+        </section>
+      </div>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

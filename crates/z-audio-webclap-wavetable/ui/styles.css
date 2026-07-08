@@ -809,3 +809,68 @@ main {
   letter-spacing: 0;
   padding: 3px 1px;
 }
+
+/* -- Serum-style mod assignment ------------------------------------------- */
+
+.mod-chip {
+  --chip-color: var(--accent);
+  background: color-mix(in srgb, var(--chip-color) 14%, var(--bg-2));
+  border: 1px solid color-mix(in srgb, var(--chip-color) 55%, var(--line));
+  border-radius: 5px;
+  color: color-mix(in srgb, var(--chip-color) 75%, #fff);
+  cursor: grab;
+  font-size: 8px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  padding: 2px 7px;
+  text-transform: uppercase;
+  touch-action: none;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.mod-chip:hover {
+  background: color-mix(in srgb, var(--chip-color) 26%, var(--bg-2));
+}
+
+.mod-chip:active {
+  cursor: grabbing;
+}
+
+.matrix-hint {
+  color: var(--text-dim);
+  font-size: 8px;
+  letter-spacing: 0.03em;
+  margin-left: auto;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mod-drag-overlay {
+  height: 100vh;
+  left: 0;
+  pointer-events: none;
+  position: fixed;
+  top: 0;
+  width: 100vw;
+  z-index: 60;
+}
+
+/* While dragging a chip, advertise every drop target. */
+
+body.mod-drag [data-dest] {
+  border-radius: 8px;
+  outline: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
+body.mod-drag .mod-drop-hover,
+body.mod-drag [data-dest].mod-drop-hover {
+  outline: 2px solid var(--accent);
+}
+
+.knob.mod-dragging-ring .knob-label {
+  color: color-mix(in srgb, var(--accent) 70%, #fff);
+}

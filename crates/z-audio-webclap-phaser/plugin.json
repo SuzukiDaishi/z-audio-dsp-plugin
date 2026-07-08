@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.phaser",
+  "name": "Z Audio Phaser",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Multi-stage stereo phaser: up to 12 swept allpass stages with feedback, stereo spread, mix, and output trim.",
+  "features": ["audio-effect", "phaser", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_phaser.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 700, "height": 420 },
+    "expanded_size": { "width": 900, "height": 580 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.phaser",
+      "name": "Z Audio Phaser",
+      "features": ["audio-effect", "phaser", "stereo"],
+      "has_ui": true
+    }
+  ]
+}

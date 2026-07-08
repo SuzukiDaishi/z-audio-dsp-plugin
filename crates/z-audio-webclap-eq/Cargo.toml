@@ -1,14 +1,13 @@
 [package]
 name = "z-audio-webclap-eq"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 publish = false
-description = "A simple 3-band EQ audio effect, built on z-audio-dsp, packaged as a real WCLAP plugin."
+description = "Pro-Q-style 8-band parametric EQ with band solo and spectrum analyzer, packaged as a real WCLAP plugin."
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wclap-plugin = { path = "../wclap-plugin", default-features = false }
-z-audio-dsp = { path = "../../thirdparty/z-audio-dsp/crates/z-audio-dsp" }

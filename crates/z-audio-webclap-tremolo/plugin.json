@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.tremolo",
+  "name": "Z Audio Tremolo",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Tremolo / auto-pan with a sine/tri/square LFO, stereo LFO phase, depth, and output trim.",
+  "features": ["audio-effect", "tremolo", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_tremolo.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 700, "height": 420 },
+    "expanded_size": { "width": 900, "height": 580 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.tremolo",
+      "name": "Z Audio Tremolo",
+      "features": ["audio-effect", "tremolo", "stereo"],
+      "has_ui": true
+    }
+  ]
+}

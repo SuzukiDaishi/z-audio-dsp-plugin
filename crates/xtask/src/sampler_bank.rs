@@ -17,6 +17,18 @@ use z_audio_synth::build_sampler_bank_bytes;
 /// truncated), used by the WebCLAP build so the wasm module stays small.
 const DEFAULT_DEV_MAX_SECONDS: f32 = 4.0;
 
+/// Frames whose peak stays below this are considered leading silence
+/// (~-60 dBFS). The VCSL piano source leads with ~1.5 s of digital silence,
+/// which made the out-of-the-box sampler/granular sound appear broken.
+const SILENCE_THRESHOLD: f32 = 1.0e-3;
+
+/// Pre-roll kept before the first audible frame so attacks stay intact.
+const PRE_ROLL_SECONDS: f32 = 0.01;
+
+/// Peak-normalization target (-1 dBFS). The raw source peaks around
+/// -42 dBFS, which is inaudible at default plugin gains.
+const PEAK_TARGET: f32 = 0.891;
+
 pub fn run(args: &[String]) -> Result<()> {
     nih_plug_xtask::chdir_workspace_root().context("could not chdir to workspace root")?;
 
@@ -55,7 +67,15 @@ pub fn run(args: &[String]) -> Result<()> {
         pcm.len() / channels.max(1) as usize
     );
 
-    let bank_bytes = build_sampler_bank_bytes(sample_rate, channels, &pcm, root_note);
+    let pre_roll = (PRE_ROLL_SECONDS * sample_rate) as usize;
+    let pcm = trim_leading_silence(&pcm, channels, SILENCE_THRESHOLD, pre_roll);
+
+    let bank_bytes = build_sampler_bank_bytes(
+        sample_rate,
+        channels,
+        &normalize_peak(pcm.clone(), PEAK_TARGET),
+        root_note,
+    );
     write_bank(&out, &bank_bytes)?;
     eprintln!(
         "Wrote sampler bank: '{}' ({} bytes)",
@@ -64,7 +84,7 @@ pub fn run(args: &[String]) -> Result<()> {
     );
 
     let max_frames = (dev_max_seconds.max(0.01) * sample_rate) as usize;
-    let dev_pcm = downmix_truncate(&pcm, channels, max_frames);
+    let dev_pcm = normalize_peak(downmix_truncate(&pcm, channels, max_frames), PEAK_TARGET);
     let dev_bank_bytes = build_sampler_bank_bytes(sample_rate, 1, &dev_pcm, root_note);
     write_bank(&dev_out, &dev_bank_bytes)?;
     eprintln!(
@@ -83,6 +103,42 @@ fn write_bank(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
     }
     fs::write(path, bytes).with_context(|| format!("could not write '{}'", path.display()))?;
     Ok(())
+}
+
+/// Drops leading frames whose per-frame peak stays below `threshold`,
+/// keeping `pre_roll_frames` before the first audible frame. Returns the
+/// input unchanged when it never crosses the threshold.
+fn trim_leading_silence(
+    pcm: &[f32],
+    channels: u8,
+    threshold: f32,
+    pre_roll_frames: usize,
+) -> Vec<f32> {
+    let channels = channels.max(1) as usize;
+    let frames = pcm.len() / channels;
+    let first = (0..frames).find(|&frame| {
+        pcm[frame * channels..(frame + 1) * channels]
+            .iter()
+            .any(|s| s.abs() >= threshold)
+    });
+    let Some(first) = first else {
+        return pcm.to_vec();
+    };
+    let start = first.saturating_sub(pre_roll_frames);
+    pcm[start * channels..].to_vec()
+}
+
+/// Scales `pcm` so its peak lands on `target` (skipped for near-silent
+/// input, where the gain would explode).
+fn normalize_peak(mut pcm: Vec<f32>, target: f32) -> Vec<f32> {
+    let peak = pcm.iter().fold(0.0_f32, |m, s| m.max(s.abs()));
+    if peak > 1.0e-6 {
+        let gain = target / peak;
+        for s in &mut pcm {
+            *s *= gain;
+        }
+    }
+    pcm
 }
 
 /// Downmixes `pcm` (interleaved, `channels` wide) to mono and truncates to
@@ -210,5 +266,40 @@ mod tests {
         let pcm = vec![1.0; 100];
         let out = downmix_truncate(&pcm, 1, 10);
         assert_eq!(out.len(), 10);
+    }
+
+    #[test]
+    fn trim_leading_silence_keeps_pre_roll() {
+        let mut pcm = vec![0.0; 100];
+        pcm[50] = 0.5;
+        let out = trim_leading_silence(&pcm, 1, 1.0e-3, 10);
+        assert_eq!(out.len(), 60); // starts at frame 40
+        assert_eq!(out[10], 0.5);
+    }
+
+    #[test]
+    fn trim_leading_silence_passes_silence_through() {
+        let pcm = vec![0.0; 16];
+        assert_eq!(trim_leading_silence(&pcm, 1, 1.0e-3, 4), pcm);
+    }
+
+    #[test]
+    fn trim_leading_silence_checks_all_channels() {
+        // Signal only on the right channel must still stop the trim.
+        let pcm = vec![0.0, 0.0, 0.0, 0.4, 0.2, 0.2];
+        let out = trim_leading_silence(&pcm, 2, 1.0e-3, 0);
+        assert_eq!(out, vec![0.0, 0.4, 0.2, 0.2]);
+    }
+
+    #[test]
+    fn normalize_peak_scales_to_target() {
+        let out = normalize_peak(vec![0.004, -0.008], 0.891);
+        assert!((out[1] + 0.891).abs() < 1.0e-6);
+        assert!((out[0] - 0.4455).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn normalize_peak_leaves_silence_alone() {
+        assert_eq!(normalize_peak(vec![0.0; 8], 0.891), vec![0.0; 8]);
     }
 }

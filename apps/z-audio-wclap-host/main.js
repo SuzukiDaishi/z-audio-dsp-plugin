@@ -20,8 +20,20 @@ const DEFAULT_SHELF_BUNDLES = [
   ["Formula Piano", "../../target/webclap/z-audio-formula-piano.wclap.tar.gz"],
   ["VCSL Piano", "../../target/webclap/z-audio-vcsl-piano.wclap.tar.gz"],
   ["Sampler", "../../target/webclap/z-audio-sampler.wclap.tar.gz"],
+  ["Granular", "../../target/webclap/z-audio-granular.wclap.tar.gz"],
+  ["Wave Synth", "../../target/webclap/z-audio-wavetable.wclap.tar.gz"],
   ["Drums", "../../target/webclap/z-audio-formula-drums.wclap.tar.gz"],
   ["EQ", "../../target/webclap/z-audio-simple-eq.wclap.tar.gz"],
+  ["Ring Mod", "../../target/webclap/z-audio-ring-mod.wclap.tar.gz"],
+  ["Distortion", "../../target/webclap/z-audio-distortion.wclap.tar.gz"],
+  ["Saturator", "../../target/webclap/z-audio-saturator.wclap.tar.gz"],
+  ["Bitcrusher", "../../target/webclap/z-audio-bitcrusher.wclap.tar.gz"],
+  ["Delay", "../../target/webclap/z-audio-delay.wclap.tar.gz"],
+  ["Chorus", "../../target/webclap/z-audio-chorus.wclap.tar.gz"],
+  ["Flanger", "../../target/webclap/z-audio-flanger.wclap.tar.gz"],
+  ["Phaser", "../../target/webclap/z-audio-phaser.wclap.tar.gz"],
+  ["Tremolo", "../../target/webclap/z-audio-tremolo.wclap.tar.gz"],
+  ["Gate", "../../target/webclap/z-audio-gate.wclap.tar.gz"],
   ["Diffuser", "../../target/webclap/z-audio-diffuser.wclap.tar.gz"],
   ["Reverb", "../../target/webclap/z-audio-parametric-reverb.wclap.tar.gz"],
   ["Limiter", "../../target/webclap/z-audio-limiter.wclap.tar.gz"],
@@ -32,7 +44,6 @@ const $ = document.querySelector.bind(document);
 const slotsRoot = $("#slots");
 const shelfRoot = $("#shelf");
 const paramsPanel = $("#params-panel");
-const uiPanel = $("#ui-panel");
 const statusLine = $("#status-line");
 const sampleRateReadout = $("#sample-rate");
 const isolationState = $("#isolation-state");
@@ -56,8 +67,6 @@ const volumeSlider = $("#volume-slider");
 const volumeReadout = $("#volume-readout");
 const startButton = $("#start-button");
 const stopButton = $("#stop-button");
-const paramsTab = $("#params-tab");
-const uiTab = $("#ui-tab");
 const midiInputSelect = $("#midi-input-select");
 const midiRescanButton = $("#midi-rescan-button");
 const midiAllNotesOffButton = $("#midi-all-notes-off-button");
@@ -75,6 +84,7 @@ const slots = Array.from({ length: SLOT_COUNT }, (_, index) => ({
   pluginId: null,
   params: [],
   latencySamples: 0,
+  uiSize: null,
   bypass: false,
   loading: false,
   error: "",
@@ -91,11 +101,7 @@ let signalSource = null;
 let signalGain = null;
 let sourceMode = SOURCE_TONE;
 let selectedSlot = 0;
-let activeTab = "params";
 let pageProxy = null;
-let currentIframe = null;
-let currentIframeNode = null;
-let currentIframeKey = null;
 let animationFrame = 0;
 let cpuTimer = 0;
 let currentAudioObjectUrl = null;
@@ -104,6 +110,10 @@ let midiAccess = null;
 let activeMidiInput = null;
 const heldMidiNotes = new Set();
 const floatingPanelClosers = new Map();
+// Plugin UIs live in their own browser windows, one per slot.
+const pluginWindows = new Map(); // slot index → { win, iframe, frameId, node, watcher }
+const frameResolvers = new Map(); // frame id → plugin node (page-proxy lookups)
+const DEFAULT_UI_SIZE = { width: 900, height: 620 };
 
 boot();
 
@@ -119,9 +129,23 @@ async function boot() {
 
   try {
     pageProxy = await globalThis.pageProxyReady;
+    // Plugin UI iframes live in popup windows, so resolve proxied resource
+    // requests through our own frame registry instead of the default
+    // host-document getElementById lookup.
+    pageProxy.getResource = (path) => {
+      const frameId = path.substr(1).replace(/[/?#].*/, "");
+      const node = frameResolvers.get(frameId);
+      if (!node) return null;
+      const rest = path.substr(frameId.length + 1);
+      if (rest.startsWith("/file/")) return node.getFile(rest.slice(5));
+      if (rest.startsWith("/get_resource/")) return node.getResource(rest.slice(13));
+      return null;
+    };
   } catch (error) {
     setStatus(`UI proxy unavailable: ${messageFromError(error)}`, true);
   }
+
+  window.addEventListener("pagehide", closeAllPluginWindows);
 }
 
 function wireUi() {
@@ -187,9 +211,6 @@ function wireUi() {
   audioElement.addEventListener("timeupdate", () => {
     if (!seeking) updateTimeUi();
   });
-
-  paramsTab.addEventListener("click", () => selectTab("params"));
-  uiTab.addEventListener("click", () => selectTab("ui"));
 
   document.body.addEventListener("dragenter", (event) => {
     dragDepth += 1;
@@ -503,7 +524,26 @@ async function instantiatePlugin(slot, url, label) {
   slot.descriptor = slot.node.descriptor || plugin || { name: label };
   slot.params = await readParams(slot.node);
   slot.latencySamples = await readLatency(slot.node);
+  slot.uiSize = await readPluginUiSize(slot.node);
   slot.error = "";
+}
+
+/** Reads the plugin-declared UI size from the bundled plugin.json, if any. */
+async function readPluginUiSize(node) {
+  if (!node?.getFile) return null;
+  try {
+    const file = await node.getFile("/plugin.json");
+    if (!file) return null;
+    const text = file instanceof Blob ? await file.text() : new TextDecoder().decode(file);
+    const ui = JSON.parse(text)?.ui;
+    const size = ui?.expanded_size || ui?.compact_size;
+    const width = Math.round(finiteNumber(size?.width, 0));
+    const height = Math.round(finiteNumber(size?.height, 0));
+    if (width > 0 && height > 0) return { width, height };
+  } catch {
+    // Bundles without a readable manifest fall back to measuring the UI.
+  }
+  return null;
 }
 
 async function readParams(node) {
@@ -530,7 +570,7 @@ async function readLatency(node) {
 async function clearSlot(index) {
   const slot = slots[index];
   closeSlotFloatingPanels(index);
-  if (slot.node?.closeInterface && currentIframeNode === slot.node) closeCurrentInterface();
+  closePluginWindow(index);
   if (slot.node) tryDisconnect(slot.node);
   if (slot.node) tryDisconnectEvents(slot.node);
   if (slot.objectUrl) URL.revokeObjectURL(slot.objectUrl);
@@ -544,6 +584,7 @@ async function clearSlot(index) {
     pluginId: null,
     params: [],
     latencySamples: 0,
+    uiSize: null,
     bypass: false,
     loading: false,
     error: "",
@@ -609,7 +650,7 @@ function renderSlots() {
     const actions = document.createElement("div");
     actions.className = "slot-actions";
     actions.append(
-      slotButton("strip", "Open compact WebCLAP UI", !slot.node?.openInterface, () => toggleStripPanel(slot)),
+      slotButton("ui", "Open the plugin UI in its own window", !slot.node?.openInterface, () => togglePluginWindow(slot)),
       slotButton("auto", "Open generated parameter controls", !slot.node, () => toggleAutoPanel(slot)),
       slotButton("save", "Copy plugin state to clipboard", !slot.node?.saveState, () => saveSlotState(slot.index)),
       slotButton("load", "Load plugin state from clipboard", !slot.node?.loadState, () => loadSlotState(slot.index)),
@@ -700,26 +741,13 @@ function selectSlot(index) {
 function renderDetails() {
   const slot = slots[selectedSlot];
   paramsPanel.replaceChildren();
-  uiPanel.replaceChildren();
-  closeCurrentInterface("details");
 
   if (!slot?.node) {
     paramsPanel.append(emptyState("Select a loaded slot to edit parameters."));
-    uiPanel.append(emptyState("No plugin UI available."));
-    uiTab.disabled = true;
-    selectTab("params", false);
     return;
   }
 
   renderParams(slot);
-  if (slot.node.openInterface) {
-    uiTab.disabled = false;
-    if (activeTab === "ui") openPluginInterface(slot);
-  } else {
-    uiTab.disabled = true;
-    uiPanel.append(emptyState("This plugin does not expose a WebCLAP UI."));
-    if (activeTab === "ui") selectTab("params", false);
-  }
 }
 
 function renderParams(slot) {
@@ -788,81 +816,115 @@ function createParamList(slot) {
   return list;
 }
 
-function selectTab(tab, rerender = true) {
-  activeTab = tab;
-  paramsTab.classList.toggle("active", tab === "params");
-  uiTab.classList.toggle("active", tab === "ui");
-  paramsPanel.classList.toggle("hidden", tab !== "params");
-  uiPanel.classList.toggle("hidden", tab !== "ui");
-  if (rerender) renderDetails();
+// --- Plugin UI windows ------------------------------------------------------
+//
+// Each plugin UI opens in its own browser window, sized from the bundle's
+// plugin.json `ui` block (WebCLAP-defined). The iframe returned by
+// `openInterface` is adopted into the popup document; resource fetches keep
+// flowing because the service-worker proxy resolves through `frameResolvers`
+// (registered against this host page), and UI→plugin postMessages are relayed
+// from the popup window back onto this window where clap-audionode listens.
+
+function togglePluginWindow(slot) {
+  const open = pluginWindows.get(slot.index);
+  if (open && !open.win.closed) {
+    closePluginWindow(slot.index);
+    return;
+  }
+  openPluginWindow(slot);
 }
 
-function openPluginInterface(slot) {
-  closePanelsByPrefix("strip-");
-  const iframe = createPluginIframe(slot, "details");
-  if (iframe) {
-    uiPanel.replaceChildren(iframe);
-  } else {
-    uiPanel.append(emptyState("Plugin UI proxy is not ready."));
+function openPluginWindow(slot) {
+  if (!pageProxy) {
+    setStatus("Plugin UI proxy is not ready.", true);
+    return;
   }
-}
+  if (!slot.node?.openInterface) {
+    setStatus(`${slotDisplayName(slot)} does not expose a WebCLAP UI.`, true);
+    return;
+  }
+  closePluginWindow(slot.index);
 
-function createPluginIframe(slot, key) {
-  if (!pageProxy || !slot.node?.openInterface) {
-    return null;
+  const size = slot.uiSize || DEFAULT_UI_SIZE;
+  const win = window.open(
+    "",
+    `z-audio-plugin-ui-${slot.index}`,
+    `popup=yes,width=${size.width},height=${size.height}`,
+  );
+  if (!win) {
+    setStatus("Plugin window was blocked by the browser popup blocker.", true);
+    return;
   }
 
-  closeCurrentInterface();
   const frameId = `plugin-ui-${crypto.randomUUID()}`;
   const iframe = slot.node.openInterface({
     filePrefix: `${pageProxy.prefix}${frameId}/file`,
     resourcePrefix: `${pageProxy.prefix}${frameId}/get_resource`,
   });
   iframe.id = frameId;
-  iframe[pageProxy.symbol] = async (path) => {
-    if (path.startsWith("/file/")) {
-      return slot.node.getFile(path.slice(5));
-    }
-    if (path.startsWith("/get_resource/")) {
-      return slot.node.getResource(path.slice(13));
-    }
-    return null;
+  frameResolvers.set(frameId, slot.node);
+
+  const doc = win.document;
+  doc.title = slotDisplayName(slot);
+  const style = doc.createElement("style");
+  style.textContent =
+    "html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:#0d1117}" +
+    "iframe{display:block;border:0;width:100%;height:100%}";
+  doc.head.append(style);
+  doc.body.append(iframe); // cross-document append adopts the iframe
+
+  // clap-audionode listens for UI messages on the host window and checks
+  // event.source, so relay ArrayBuffer messages arriving in the popup.
+  // The payload must be re-created in this window's realm: a popup-realm
+  // ArrayBuffer fails the host's `instanceof ArrayBuffer` checks.
+  const relay = (event) => {
+    if (event.source !== iframe.contentWindow) return;
+    if (Object.prototype.toString.call(event.data) !== "[object ArrayBuffer]") return;
+    const data = new Uint8Array(new Uint8Array(event.data)).buffer;
+    window.dispatchEvent(new MessageEvent("message", { data, source: event.source }));
   };
-  currentIframe = iframe;
-  currentIframeNode = slot.node;
-  currentIframeKey = key;
-  return iframe;
-}
+  win.addEventListener("message", relay);
 
-function closeCurrentInterface(expectedKey = null) {
-  if (expectedKey && currentIframeKey !== expectedKey) return;
-  if (currentIframeNode?.closeInterface) currentIframeNode.closeInterface();
-  if (currentIframe) currentIframe.remove();
-  currentIframe = null;
-  currentIframeNode = null;
-  currentIframeKey = null;
-}
-
-function toggleStripPanel(slot) {
-  const key = `strip-${slot.index}`;
-  if (floatingPanelClosers.has(key)) {
-    closeFloatingPanel(key);
-    return;
+  // No manifest size: size the window to the UI document once it loads.
+  if (!slot.uiSize) {
+    iframe.addEventListener("load", () => {
+      try {
+        const root = iframe.contentDocument?.documentElement;
+        if (!root) return;
+        const width = Math.min(Math.max(root.scrollWidth, 320), screen.availWidth);
+        const height = Math.min(Math.max(root.scrollHeight, 240), screen.availHeight);
+        win.resizeBy(width - win.innerWidth, height - win.innerHeight);
+      } catch {
+        // Keep the default size if the UI document is not measurable.
+      }
+    });
   }
 
-  closePanelsByPrefix("strip-");
-  const body = document.createElement("div");
-  body.className = "floating-panel-body strip-body";
-  const iframe = createPluginIframe(slot, key);
-  if (iframe) {
-    body.append(iframe);
-  } else {
-    body.append(emptyState("This plugin does not expose a compact WebCLAP UI."));
-  }
+  // There is no reliable cross-window close event, so poll `closed` to tear
+  // down the interface when the user closes the popup directly.
+  const watcher = window.setInterval(() => {
+    if (win.closed) closePluginWindow(slot.index);
+  }, 500);
 
-  openFloatingPanel(key, `${slotDisplayName(slot)} strip`, body, "strip-panel", () => {
-    closeCurrentInterface(key);
-  });
+  pluginWindows.set(slot.index, { win, iframe, frameId, node: slot.node, relay, watcher });
+  setStatus(`${slotDisplayName(slot)} UI opened (${size.width}×${size.height})`);
+}
+
+function closePluginWindow(index) {
+  const open = pluginWindows.get(index);
+  if (!open) return;
+  pluginWindows.delete(index);
+  window.clearInterval(open.watcher);
+  frameResolvers.delete(open.frameId);
+  if (open.node?.closeInterface) open.node.closeInterface();
+  if (!open.win.closed) {
+    open.win.removeEventListener("message", open.relay);
+    open.win.close();
+  }
+}
+
+function closeAllPluginWindows() {
+  for (const index of [...pluginWindows.keys()]) closePluginWindow(index);
 }
 
 function toggleAutoPanel(slot) {
@@ -915,14 +977,7 @@ function closeFloatingPanel(key) {
   floatingPanelClosers.get(key)?.close();
 }
 
-function closePanelsByPrefix(prefix) {
-  for (const key of [...floatingPanelClosers.keys()]) {
-    if (key.startsWith(prefix)) closeFloatingPanel(key);
-  }
-}
-
 function closeSlotFloatingPanels(index) {
-  closeFloatingPanel(`strip-${index}`);
   closeFloatingPanel(`auto-${index}`);
 }
 

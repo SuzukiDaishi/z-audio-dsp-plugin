@@ -5,7 +5,10 @@ Audio plugin wrappers and packaging for `z-audio-dsp`.
 This workspace builds native and WebCLAP wrappers for:
 
 - `Z Audio Simple Synth`: MIDI note input to stereo audio output
-- `Z Audio Simple EQ`: mono/stereo audio input to audio output
+- `Z Audio EQ`: Pro-Q-style 8-band parametric EQ (bell/shelf/cut/notch,
+  6-48 dB/oct slopes, per-band Stereo/Mid/Side/L/R placement, band-solo
+  listen, pre/post spectrum analyzer) as WebCLAP; the native VST3/CLAP
+  build remains the original 3-band Simple EQ with its own UI snapshot
 - `Z Audio Formula Piano`: modal/formula piano instrument
 - `Z Audio VCSL Piano`: sampler piano built from VCSL Keys "Grand Piano, K"
 - `Z Audio Sampler`: multi-zone sampler with GUI file loading and
@@ -17,6 +20,20 @@ This workspace builds native and WebCLAP wrappers for:
 - `Z Audio Parametric Reverb`: stereo FDN reverb effect
 - `Z Audio Limiter`: stereo lookahead limiter effect
 - `Z Audio Compressor`: stereo feed-forward compressor effect
+- `Z Audio Ring Mod`: ring modulator with a sine/tri/saw/square carrier,
+  WebCLAP only
+- `Z Audio Distortion`: waveshaping distortion (soft/hard/fold/asym) with
+  tone control, WebCLAP only
+- `Z Audio Saturator`: warm level-compensated saturation with tilt tone,
+  WebCLAP only
+- `Z Audio Bitcrusher`: bit-depth + sample-rate reduction, WebCLAP only
+- `Z Audio Delay`: stereo delay with ping-pong and feedback damping,
+  WebCLAP only
+- `Z Audio Chorus`: multi-voice stereo chorus, WebCLAP only
+- `Z Audio Flanger`: stereo flanger with bipolar feedback, WebCLAP only
+- `Z Audio Phaser`: 2-12 stage stereo phaser, WebCLAP only
+- `Z Audio Tremolo`: tremolo / auto-pan with stereo LFO phase, WebCLAP only
+- `Z Audio Gate`: noise gate with hold and range, WebCLAP only
 
 Supported plugin formats:
 
@@ -203,9 +220,13 @@ plugin-specific visualization front and center:
 
 - **Simple Synth** — live scopes for the oscillator shape, amp envelope,
   and LFO that track the controls.
-- **Simple EQ** — a log-frequency response editor with draggable band
-  nodes (drag = freq/gain, wheel = Q, double-click = band on/off); the
-  plotted curves are exact RBJ biquad responses.
+- **EQ** — a Pro-Q-style editor: real-time pre/post spectrum analyzer
+  behind the summed curve, double-click to add one of 8 bands, drag its
+  colored dot (freq/gain), wheel for Q, double-click the dot to remove.
+  The panel picks the band type (bell / lo-hi shelf / lo-hi cut / notch),
+  cut slope (6/12/24/48 dB/oct), Stereo/Mid/Side/L/R placement, and a
+  SOLO that plays only that band's region. All plotted curves are the
+  exact RBJ responses the wasm engine runs.
 - **Compressor** — a soft-knee transfer curve you can drag (threshold /
   ratio) and wheel (knee), with gain-reduction shading.
 - **Limiter** — a brickwall transfer curve with draggable threshold and
@@ -217,6 +238,26 @@ plugin-specific visualization front and center:
   drag to reshape size/diffusion.
 - **VCSL Piano** — a draggable velocity→loudness response curve.
 - **Sampler** — see the sampler section above.
+- **Ring Mod** — the carrier multiplied against a reference sine; drag
+  for carrier frequency (←→) and mix (↑↓).
+- **Distortion** — the exact waveshaper transfer curve (soft / hard /
+  fold / asym); drag vertically for drive.
+- **Saturator** — the level-compensated saturation curve; drag for drive
+  (↑↓) and warmth/asymmetry (←→).
+- **Bitcrusher** — a reference sine run through the exact quantize +
+  sample-and-hold; drag for downsample (←→) and bit depth (↑↓).
+- **Delay** — a decaying echo-tap timeline for L/R; drag for time (←→)
+  and feedback (↑↓).
+- **Chorus** — the per-voice delay-modulation LFO curves; drag for rate
+  (←→) and depth (↑↓).
+- **Flanger** — the comb-filter response at the sweep center; drag for
+  manual delay (←→) and bipolar feedback (↑↓).
+- **Phaser** — the notch response of the allpass cascade; drag for
+  center (←→) and depth (↑↓).
+- **Tremolo** — the L/R gain LFOs over one cycle; drag for rate (←→)
+  and depth (↑↓).
+- **Gate** — the input/output transfer curve with the threshold line;
+  drag for threshold (←→) and range (↑↓).
 - **Wave Synth** — Serum-style panels built from rotary knobs (vertical
   drag, Shift = fine, wheel, double-click = default) and directly
   editable canvases: each oscillator draws a pseudo-3D stack of its
@@ -315,7 +356,7 @@ two sliders are inactive.
 | Plugin | CLAP ID | VST3 Class ID | WebCLAP bundle |
 | --- | --- | --- | --- |
 | Z Audio Simple Synth | `dev.zaudio.simple-synth` | `ZAudioSmplSynth1` | `z-audio-simple-synth.wclap.tar.gz` |
-| Z Audio Simple EQ | `dev.zaudio.simple-eq` | `ZAudioSimpleEQ01` | `z-audio-simple-eq.wclap.tar.gz` |
+| Z Audio EQ (WebCLAP) / Simple EQ (native) | `dev.zaudio.simple-eq` | `ZAudioSimpleEQ01` | `z-audio-simple-eq.wclap.tar.gz` |
 | Z Audio Formula Piano | `dev.zaudio.formula-piano` | `ZAudioFormulaPno` | `z-audio-formula-piano.wclap.tar.gz` |
 | Z Audio VCSL Piano | `dev.zaudio.vcsl-piano` | `ZAudioVCSLPiano1` | `z-audio-vcsl-piano.wclap.tar.gz` |
 | Z Audio Sampler | `dev.zaudio.sampler` | `ZAudioSamplerMZ1` | `z-audio-sampler.wclap.tar.gz` |
@@ -324,6 +365,16 @@ two sliders are inactive.
 | Z Audio Parametric Reverb | `dev.zaudio.parametric-reverb` | `ZAudioParaReverb` | `z-audio-parametric-reverb.wclap.tar.gz` |
 | Z Audio Limiter | `dev.zaudio.limiter` | `ZAudioLimiter000` | `z-audio-limiter.wclap.tar.gz` |
 | Z Audio Compressor | `dev.zaudio.compressor` | `ZAudioCompressor` | `z-audio-compressor.wclap.tar.gz` |
+| Z Audio Ring Mod | `dev.zaudio.ringmod` | — (WebCLAP only) | `z-audio-ring-mod.wclap.tar.gz` |
+| Z Audio Distortion | `dev.zaudio.distortion` | — (WebCLAP only) | `z-audio-distortion.wclap.tar.gz` |
+| Z Audio Saturator | `dev.zaudio.saturator` | — (WebCLAP only) | `z-audio-saturator.wclap.tar.gz` |
+| Z Audio Bitcrusher | `dev.zaudio.bitcrusher` | — (WebCLAP only) | `z-audio-bitcrusher.wclap.tar.gz` |
+| Z Audio Delay | `dev.zaudio.delay` | — (WebCLAP only) | `z-audio-delay.wclap.tar.gz` |
+| Z Audio Chorus | `dev.zaudio.chorus` | — (WebCLAP only) | `z-audio-chorus.wclap.tar.gz` |
+| Z Audio Flanger | `dev.zaudio.flanger` | — (WebCLAP only) | `z-audio-flanger.wclap.tar.gz` |
+| Z Audio Phaser | `dev.zaudio.phaser` | — (WebCLAP only) | `z-audio-phaser.wclap.tar.gz` |
+| Z Audio Tremolo | `dev.zaudio.tremolo` | — (WebCLAP only) | `z-audio-tremolo.wclap.tar.gz` |
+| Z Audio Gate | `dev.zaudio.gate` | — (WebCLAP only) | `z-audio-gate.wclap.tar.gz` |
 
 ## Parameters
 
@@ -352,9 +403,14 @@ can reuse the engine later). Web param ids are the 500 block:
   resonance, drive, key tracking, dry/wet mix, and per-oscillator routing
 - Env 1 (amp) and Env 2: ADSR plus a shared curve control
 - LFO 1/2: sine/tri/saw/square/S&H, 0.01-20 Hz, start phase, retrigger
-- Mod matrix: 8 slots of source (Env 2, LFO 1/2, velocity, note) →
+- Mod matrix: 8 slots of source (Env 1/2, LFO 1/2, velocity, note) →
   destination (WT pos / pitch / level / pan per osc, cutoff, resonance,
-  master) → bipolar amount; every slot field is host-automatable
+  master) → bipolar amount; every slot field is host-automatable.
+  Assignments are made Serum-style in the UI: drag a source chip
+  (ENV 1/2, LFO 1/2, VEL, NOTE) onto a knob or canvas, drag the colored
+  ring around a modulated knob to set the depth, and double-click the
+  ring to remove the connection. The matrix list mirrors the same slots
+  for fine editing.
 - Global: master, polyphony (1-16), pitch-bend range (declared; WebCLAP
   hosts don't deliver bend events yet), glide
 

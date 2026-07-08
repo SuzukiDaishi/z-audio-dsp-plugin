@@ -89,6 +89,66 @@ const WEBCLAP_BUNDLES: &[WebClapBundle] = &[
         crate_dir: "crates/z-audio-webclap-compressor",
         wasm_file: "z_audio_webclap_compressor.wasm",
     },
+    WebClapBundle {
+        package: "z-audio-webclap-ringmod",
+        bundle_name: "z-audio-ring-mod.wclap",
+        crate_dir: "crates/z-audio-webclap-ringmod",
+        wasm_file: "z_audio_webclap_ringmod.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-distortion",
+        bundle_name: "z-audio-distortion.wclap",
+        crate_dir: "crates/z-audio-webclap-distortion",
+        wasm_file: "z_audio_webclap_distortion.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-saturator",
+        bundle_name: "z-audio-saturator.wclap",
+        crate_dir: "crates/z-audio-webclap-saturator",
+        wasm_file: "z_audio_webclap_saturator.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-bitcrusher",
+        bundle_name: "z-audio-bitcrusher.wclap",
+        crate_dir: "crates/z-audio-webclap-bitcrusher",
+        wasm_file: "z_audio_webclap_bitcrusher.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-delay",
+        bundle_name: "z-audio-delay.wclap",
+        crate_dir: "crates/z-audio-webclap-delay",
+        wasm_file: "z_audio_webclap_delay.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-chorus",
+        bundle_name: "z-audio-chorus.wclap",
+        crate_dir: "crates/z-audio-webclap-chorus",
+        wasm_file: "z_audio_webclap_chorus.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-flanger",
+        bundle_name: "z-audio-flanger.wclap",
+        crate_dir: "crates/z-audio-webclap-flanger",
+        wasm_file: "z_audio_webclap_flanger.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-phaser",
+        bundle_name: "z-audio-phaser.wclap",
+        crate_dir: "crates/z-audio-webclap-phaser",
+        wasm_file: "z_audio_webclap_phaser.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-tremolo",
+        bundle_name: "z-audio-tremolo.wclap",
+        crate_dir: "crates/z-audio-webclap-tremolo",
+        wasm_file: "z_audio_webclap_tremolo.wasm",
+    },
+    WebClapBundle {
+        package: "z-audio-webclap-gate",
+        bundle_name: "z-audio-gate.wclap",
+        crate_dir: "crates/z-audio-webclap-gate",
+        wasm_file: "z_audio_webclap_gate.wasm",
+    },
 ];
 
 fn main() -> nih_plug_xtask::Result<()> {

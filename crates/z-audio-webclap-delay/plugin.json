@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.delay",
+  "name": "Z Audio Delay",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Stereo delay with linked or independent times, ping-pong mode, damped feedback, mix, and output trim.",
+  "features": ["audio-effect", "delay", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_delay.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 700, "height": 420 },
+    "expanded_size": { "width": 900, "height": 580 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.delay",
+      "name": "Z Audio Delay",
+      "features": ["audio-effect", "delay", "stereo"],
+      "has_ui": true
+    }
+  ]
+}

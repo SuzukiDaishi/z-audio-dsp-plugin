@@ -86,14 +86,17 @@ impl Plugin for ZAudioSimpleEq {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        // Windows/macOS: reuse the WebCLAP UI inside a wry webview (see
+        // Windows/macOS: a wry webview editor (see
         // crates/z-audio-webview-editor). Linux hosts can't embed a
         // webview in the plugin window, so they keep the egui editor.
+        // The UI is this crate's own snapshot of the original 3-band
+        // WebCLAP EQ page — the live webclap-eq UI has since grown into
+        // the 8-band pro EQ with a different parameter surface.
         #[cfg(any(windows, target_os = "macos"))]
         {
             let p = &self.params;
             return z_audio_webview_editor::webview_editor_from_ui!(
-                "../../z-audio-webclap-eq/ui",
+                "../ui",
                 (960, 540),
                 vec![
                     z_audio_webview_editor::map(40, p.low.enabled.as_ptr()),
