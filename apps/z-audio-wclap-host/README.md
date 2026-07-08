@@ -28,7 +28,11 @@ chain.
 
 ## Slot Controls
 
-- `strip`: opens the plugin WebCLAP UI in a compact floating panel.
+- `ui`: opens the plugin WebCLAP UI in its own browser window, sized from the
+  bundle's `plugin.json` `ui` block (`expanded_size`, falling back to
+  `compact_size`, then to measuring the UI document). Click again to close.
+  Each slot can keep its own UI window open at the same time. Allow popups
+  for the host origin if the browser blocks the window.
 - `auto`: opens generated parameter sliders.
 - `save` / `load`: copies plugin state to clipboard as base64, then restores it.
 - `on` / `byp`: toggles slot bypass.

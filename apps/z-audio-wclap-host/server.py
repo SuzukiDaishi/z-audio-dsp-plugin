@@ -15,6 +15,8 @@ SHELF_LABELS = {
     "z-audio-formula-piano": "Formula Piano",
     "z-audio-vcsl-piano": "VCSL Piano",
     "z-audio-sampler": "Sampler",
+    "z-audio-granular": "Granular",
+    "z-audio-wavetable": "Wave Synth",
     "z-audio-formula-drums": "Drums",
     "z-audio-simple-eq": "EQ",
     "z-audio-diffuser": "Diffuser",
