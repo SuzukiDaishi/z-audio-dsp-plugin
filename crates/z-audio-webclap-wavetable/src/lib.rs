@@ -2,11 +2,13 @@
 //! instrument.
 //!
 //! Two morphing wavetable oscillators (factory tables with band-limited
-//! mip levels, up to 8-voice unison each), a per-voice TPT state-variable
-//! filter, two ADSR envelopes (Env1 hard-wired to amp), two LFOs, and an
-//! 8-slot modulation matrix — every slot field is an automatable host
-//! parameter. See [`engine::SynthEngine`] for the DSP and [`params`] for
-//! the id surface (web ids 500-603).
+//! mip levels, up to 8-voice unison each, Serum-style warp modes incl.
+//! cross-osc FM/RM/AM), a per-voice TPT state-variable filter (LP/HP/BP/
+//! notch/comb/formant), a global distortion stage, two ADSR envelopes
+//! (Env1 hard-wired to amp), two LFOs, and an 8-slot modulation matrix —
+//! every slot field is an automatable host parameter. See
+//! [`engine::SynthEngine`] for the DSP and [`params`] for the id surface
+//! (web ids 500-607).
 //!
 //! The [`engine`], [`params`] and [`protocol`] modules are `pub` because
 //! this crate is also meant to serve as the engine library for a future
@@ -39,7 +41,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     vendor: b"zukky\0",
     url: b"https://github.com/SuzukiDaishi/z-audio-dsp\0",
     version: b"0.1.0\0",
-    description: b"Serum-inspired wavetable synth: 2 morphing oscillators with unison, SVF filter, 2 envelopes, 2 LFOs, mod matrix\0",
+    description: b"Serum-inspired wavetable synth: 2 morphing oscillators with unison + warp (FM/sync/bend), formant/comb filters, distortion, 2 envelopes, 2 LFOs, mod matrix\0",
     features: &[b"instrument\0", b"synthesizer\0", b"stereo\0"],
     audio_inputs: 0,
     audio_outputs: 1,
@@ -89,6 +91,36 @@ pub fn param_value(p: &SynthParams, id: u32) -> f64 {
         P_FILTER_MIX => p.filter_mix,
         P_FILTER_ROUTE_A => p.route_a as u8 as f32,
         P_FILTER_ROUTE_B => p.route_b as u8 as f32,
+        P_DIST_ENABLE => p.dist_enable as u8 as f32,
+        P_DIST_MODE => p.dist_mode as f32,
+        P_DIST_DRIVE => p.dist_drive,
+        P_DIST_MIX => p.dist_mix,
+        P_ENV1_DELAY => p.env1.delay_s,
+        P_ENV1_HOLD => p.env1.hold_s,
+        P_ENV2_DELAY => p.env2.delay_s,
+        P_ENV2_HOLD => p.env2.hold_s,
+        P_LFO1_FADE => p.lfo1.fade_s,
+        P_LFO1_ONESHOT => p.lfo1.one_shot as u8 as f32,
+        P_LFO2_FADE => p.lfo2.fade_s,
+        P_LFO2_ONESHOT => p.lfo2.one_shot as u8 as f32,
+        P_VEL_CURVE => p.vel_curve,
+        P_NOTE_CENTER => p.note_center as f32,
+        P_NOTE_RANGE => p.note_range as f32,
+        id if (P_MACRO1..=P_MACRO4).contains(&id) => p.macros[(id - P_MACRO1) as usize],
+        id if (RND1_BASE..RND1_BASE + RND_FIELDS).contains(&id)
+            || (RND2_BASE..RND2_BASE + RND_FIELDS).contains(&id) =>
+        {
+            let (base, r) = if id >= RND2_BASE {
+                (RND2_BASE, &p.rnd2)
+            } else {
+                (RND1_BASE, &p.rnd1)
+            };
+            match id - base {
+                RND_MODE => r.mode as f32,
+                RND_RATE => r.rate_hz,
+                _ => r.retrig as u8 as f32,
+            }
+        }
         id if (OSC_A_BASE..OSC_A_BASE + OSC_FIELDS).contains(&id)
             || (OSC_B_BASE..OSC_B_BASE + OSC_FIELDS).contains(&id) =>
         {
@@ -111,7 +143,9 @@ pub fn param_value(p: &SynthParams, id: u32) -> f64 {
                 OSC_PHASE => o.phase,
                 OSC_RAND_PHASE => o.rand_phase,
                 OSC_PAN => o.pan,
-                _ => o.level,
+                OSC_LEVEL => o.level,
+                OSC_WARP_MODE => o.warp_mode as f32,
+                _ => o.warp_amount,
             }
         }
         id if (ENV1_BASE..ENV1_BASE + ENV_FIELDS).contains(&id)
@@ -170,7 +204,9 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
         P_BEND_RANGE => p.bend_range = v.clamp(0.0, 24.0).round(),
         P_GLIDE => p.glide_s = v.clamp(0.0, 2.0),
         P_FILTER_ENABLE => p.filter_enable = v >= 0.5,
-        P_FILTER_TYPE => p.filter_type = v.clamp(0.0, 3.0).round() as u8,
+        P_FILTER_TYPE => {
+            p.filter_type = v.clamp(0.0, (FILTER_TYPE_COUNT - 1) as f32).round() as u8
+        }
         P_FILTER_CUTOFF => p.cutoff_hz = v.clamp(20.0, 20_000.0),
         P_FILTER_RESO => p.resonance = v.clamp(0.0, 1.0),
         P_FILTER_DRIVE => p.drive = v.clamp(0.0, 1.0),
@@ -178,6 +214,38 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
         P_FILTER_MIX => p.filter_mix = v.clamp(0.0, 1.0),
         P_FILTER_ROUTE_A => p.route_a = v >= 0.5,
         P_FILTER_ROUTE_B => p.route_b = v >= 0.5,
+        P_DIST_ENABLE => p.dist_enable = v >= 0.5,
+        P_DIST_MODE => p.dist_mode = v.clamp(0.0, (DIST_MODE_COUNT - 1) as f32).round() as u8,
+        P_DIST_DRIVE => p.dist_drive = v.clamp(0.0, 1.0),
+        P_DIST_MIX => p.dist_mix = v.clamp(0.0, 1.0),
+        P_ENV1_DELAY => p.env1.delay_s = v.clamp(0.0, 2.0),
+        P_ENV1_HOLD => p.env1.hold_s = v.clamp(0.0, 2.0),
+        P_ENV2_DELAY => p.env2.delay_s = v.clamp(0.0, 2.0),
+        P_ENV2_HOLD => p.env2.hold_s = v.clamp(0.0, 2.0),
+        P_LFO1_FADE => p.lfo1.fade_s = v.clamp(0.0, 5.0),
+        P_LFO1_ONESHOT => p.lfo1.one_shot = v >= 0.5,
+        P_LFO2_FADE => p.lfo2.fade_s = v.clamp(0.0, 5.0),
+        P_LFO2_ONESHOT => p.lfo2.one_shot = v >= 0.5,
+        P_VEL_CURVE => p.vel_curve = v.clamp(-1.0, 1.0),
+        P_NOTE_CENTER => p.note_center = v.clamp(0.0, 127.0).round() as u8,
+        P_NOTE_RANGE => p.note_range = v.clamp(1.0, 64.0).round() as u8,
+        id if (P_MACRO1..=P_MACRO4).contains(&id) => {
+            p.macros[(id - P_MACRO1) as usize] = v.clamp(0.0, 1.0)
+        }
+        id if (RND1_BASE..RND1_BASE + RND_FIELDS).contains(&id)
+            || (RND2_BASE..RND2_BASE + RND_FIELDS).contains(&id) =>
+        {
+            let (base, r) = if id >= RND2_BASE {
+                (RND2_BASE, &mut p.rnd2)
+            } else {
+                (RND1_BASE, &mut p.rnd1)
+            };
+            match id - base {
+                RND_MODE => r.mode = v.clamp(0.0, (RND_MODE_COUNT - 1) as f32).round() as u8,
+                RND_RATE => r.rate_hz = v.clamp(0.01, 50.0),
+                _ => r.retrig = v >= 0.5,
+            }
+        }
         id if (OSC_A_BASE..OSC_A_BASE + OSC_FIELDS).contains(&id)
             || (OSC_B_BASE..OSC_B_BASE + OSC_FIELDS).contains(&id) =>
         {
@@ -206,7 +274,11 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
                 OSC_PHASE => o.phase = v.clamp(0.0, 1.0),
                 OSC_RAND_PHASE => o.rand_phase = v.clamp(0.0, 1.0),
                 OSC_PAN => o.pan = v.clamp(-1.0, 1.0),
-                _ => o.level = v.clamp(0.0, 1.0),
+                OSC_LEVEL => o.level = v.clamp(0.0, 1.0),
+                OSC_WARP_MODE => {
+                    o.warp_mode = v.clamp(0.0, (WARP_MODE_COUNT - 1) as f32).round() as u8
+                }
+                _ => o.warp_amount = v.clamp(0.0, 1.0),
             }
         }
         id if (ENV1_BASE..ENV1_BASE + ENV_FIELDS).contains(&id)
@@ -244,8 +316,8 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
                 &mut p.lfo2
             };
             match id - base {
-                LFO_WAVE => l.wave = v.clamp(0.0, 4.0).round() as u8,
-                LFO_RATE => l.rate_hz = v.clamp(0.01, 20.0),
+                LFO_WAVE => l.wave = v.clamp(0.0, (LFO_WAVE_COUNT - 1) as f32).round() as u8,
+                LFO_RATE => l.rate_hz = v.clamp(0.01, 50.0),
                 LFO_PHASE => l.phase = v.clamp(0.0, 1.0),
                 _ => l.retrig = v >= 0.5,
             }
@@ -271,20 +343,25 @@ struct ZAudioWebWavetable {
     ui_seen: bool,
     /// Output samples until the next meter push (~30 Hz).
     meter_countdown: usize,
-    /// Waveform previews resend when these change (table, wt_pos ×2).
-    last_preview_key: (u8, u32, u8, u32),
+    /// Waveform previews resend when these change (table, wt_pos, warp
+    /// mode/amount ×2 oscillators).
+    last_preview_key: (u8, u32, u8, u32, u8, u32, u8, u32),
     /// Stack packets resend when a table selection changes.
     last_stack_key: (u8, u8),
     sample_rate: f32,
 }
 
 impl ZAudioWebWavetable {
-    fn preview_key(p: &SynthParams) -> (u8, u32, u8, u32) {
+    fn preview_key(p: &SynthParams) -> (u8, u32, u8, u32, u8, u32, u8, u32) {
         (
             p.osc_a.table,
             p.osc_a.wt_pos.to_bits(),
             p.osc_b.table,
             p.osc_b.wt_pos.to_bits(),
+            p.osc_a.warp_mode,
+            p.osc_a.warp_amount.to_bits(),
+            p.osc_b.warp_mode,
+            p.osc_b.warp_amount.to_bits(),
         )
     }
 
@@ -314,9 +391,9 @@ impl ZAudioWebWavetable {
     }
 
     fn push_meter(&mut self) {
-        let (env1, env2, lfo1, lfo2) = self.engine.meter();
+        let frame = self.engine.meter();
         let voices = self.engine.active_voices().min(255) as u8;
-        send_to_ui(&encode_meter(voices, env1, env2, lfo1, lfo2));
+        send_to_ui(&encode_meter(voices, &frame));
     }
 }
 
@@ -329,7 +406,7 @@ impl Plugin for ZAudioWebWavetable {
             right: vec![0.0; 128],
             ui_seen: false,
             meter_countdown: 0,
-            last_preview_key: (255, 0, 255, 0),
+            last_preview_key: (255, 0, 255, 0, 255, 0, 255, 0),
             last_stack_key: (255, 255),
             sample_rate: 48_000.0,
         }
@@ -541,6 +618,189 @@ mod tests {
                 got
             );
         }
+    }
+
+    #[test]
+    fn pre_expansion_state_loads_with_new_features_inert() {
+        // A project saved before the growl expansion only carries ids
+        // 500-603 (and no warp fields inside the osc blocks). Replaying
+        // such a state must leave every new feature at its inert default.
+        let mut p = SynthParams::default();
+        for def in param_defs() {
+            let is_new = matches!(def.id, 523 | 524 | 543 | 544 | 604..=607);
+            if def.id <= 603 && !is_new {
+                apply_param(&mut p, def.id, (def.min + def.max) * 0.5);
+            }
+        }
+        assert_eq!(p.osc_a.warp_mode, 0);
+        assert_eq!(p.osc_a.warp_amount, 0.0);
+        assert_eq!(p.osc_b.warp_mode, 0);
+        assert_eq!(p.osc_b.warp_amount, 0.0);
+        assert!(!p.dist_enable);
+    }
+
+    /// The factory preset bank, parsed straight from the shipped UI file
+    /// so the JS ids can never drift from the Rust param surface.
+    const PRESETS_JS: &str = include_str!("../ui/presets.js");
+
+    /// Hand-rolled scanner honoring the FORMAT CONTRACT documented at the
+    /// top of ui/presets.js: pairs are `NNN: <number>` inside `set: {...}`
+    /// blocks (which may span lines but contain no nested braces).
+    fn scan_presets(src: &str) -> Vec<Vec<(u32, f64)>> {
+        let mut presets = Vec::new();
+        let mut current: Option<Vec<(u32, f64)>> = None;
+        for raw in src.lines() {
+            let mut rest = raw.split("//").next().unwrap();
+            loop {
+                if current.is_none() {
+                    match rest.find("set:") {
+                        Some(at) => {
+                            current = Some(Vec::new());
+                            rest = &rest[at + 4..];
+                        }
+                        None => break,
+                    }
+                }
+                // Inside a set block: consume `NNN: value` pairs until `}`.
+                let bytes = rest.as_bytes();
+                let mut i = 0;
+                let mut closed_at = None;
+                while i < bytes.len() {
+                    if bytes[i] == b'}' {
+                        closed_at = Some(i);
+                        break;
+                    }
+                    if i + 3 < bytes.len()
+                        && bytes[i].is_ascii_digit()
+                        && bytes[i + 1].is_ascii_digit()
+                        && bytes[i + 2].is_ascii_digit()
+                        && bytes[i + 3] == b':'
+                    {
+                        let id: u32 = rest[i..i + 3].parse().unwrap();
+                        let tail = &rest[i + 4..];
+                        let trimmed = tail.trim_start();
+                        let end = trimmed
+                            .find([',', '}', ' '])
+                            .unwrap_or(trimmed.len());
+                        let literal = &trimmed[..end];
+                        let value: f64 = literal.parse().unwrap_or_else(|_| {
+                            panic!("preset id {id}: unparseable value {literal:?}")
+                        });
+                        current.as_mut().unwrap().push((id, value));
+                        i += 4 + (tail.len() - trimmed.len()) + end;
+                    } else {
+                        i += 1;
+                    }
+                }
+                match closed_at {
+                    Some(at) => {
+                        presets.push(current.take().unwrap());
+                        rest = &rest[at + 1..];
+                    }
+                    None => break, // set continues on the next line
+                }
+            }
+        }
+        presets
+    }
+
+    #[test]
+    fn factory_presets_are_valid() {
+        let presets = scan_presets(PRESETS_JS);
+        assert_eq!(presets.len(), 60, "expected 60 factory presets");
+        let pairs: usize = presets.iter().map(|p| p.len()).sum();
+        assert!(pairs >= 400, "scanner found too few pairs ({pairs})");
+
+        let defs: std::collections::HashMap<u32, _> =
+            param_defs().into_iter().map(|d| (d.id, d)).collect();
+        for (pi, preset) in presets.iter().enumerate() {
+            let mut p = SynthParams::default();
+            for &(id, v) in preset {
+                let def = defs
+                    .get(&id)
+                    .unwrap_or_else(|| panic!("preset {pi}: unknown param id {id}"));
+                assert!(
+                    v >= def.min && v <= def.max,
+                    "preset {pi}: id {id} value {v} outside [{}, {}]",
+                    def.min,
+                    def.max
+                );
+                if def.flags & wclap_plugin::PARAM_IS_STEPPED != 0 {
+                    assert!(
+                        v.fract() == 0.0,
+                        "preset {pi}: stepped id {id} has fractional value {v}"
+                    );
+                }
+                apply_param(&mut p, id, v);
+                assert!(
+                    (param_value(&p, id) - v).abs() < 1.0e-4,
+                    "preset {pi}: id {id} value {v} did not round-trip"
+                );
+            }
+        }
+
+        // Coverage: the bank must exercise the whole factory palette.
+        let collect = |ids: &[u32]| -> std::collections::HashSet<i64> {
+            presets
+                .iter()
+                .flatten()
+                .filter(|(id, _)| ids.contains(id))
+                .map(|&(_, v)| v as i64)
+                .collect()
+        };
+        let tables = collect(&[
+            OSC_A_BASE + OSC_TABLE,
+            OSC_B_BASE + OSC_TABLE,
+        ]);
+        for t in 0..wavetable::TABLE_COUNT as i64 {
+            assert!(tables.contains(&t), "no preset uses table {t}");
+        }
+        let warps = collect(&[
+            OSC_A_BASE + OSC_WARP_MODE,
+            OSC_B_BASE + OSC_WARP_MODE,
+        ]);
+        for w in 1..WARP_MODE_COUNT as i64 {
+            assert!(warps.contains(&w), "no preset uses warp mode {w}");
+        }
+        let filters = collect(&[P_FILTER_TYPE]);
+        for f in 0..FILTER_TYPE_COUNT as i64 {
+            assert!(filters.contains(&f), "no preset uses filter type {f}");
+        }
+        let dists = collect(&[P_DIST_MODE]);
+        for d in 0..DIST_MODE_COUNT as i64 {
+            assert!(dists.contains(&d), "no preset uses dist mode {d}");
+        }
+        let source_ids: Vec<u32> = (0..MOD_SLOTS)
+            .map(|s| MOD_BASE + s * MOD_FIELDS + MOD_SOURCE)
+            .collect();
+        let sources = collect(&source_ids);
+        for s in 1..SRC_COUNT as i64 {
+            assert!(sources.contains(&s), "no preset uses mod source {s}");
+        }
+        let rnd_modes = collect(&[RND1_BASE + RND_MODE, RND2_BASE + RND_MODE]);
+        for m in 0..RND_MODE_COUNT as i64 {
+            assert!(rnd_modes.contains(&m), "no preset uses random mode {m}");
+        }
+        // The DAHDSR / LFO extensions must be showcased somewhere too.
+        let uses = |id: u32| presets.iter().flatten().any(|&(pid, _)| pid == id);
+        assert!(uses(P_ENV1_DELAY), "no preset uses env delay");
+        assert!(
+            uses(P_LFO1_FADE) || uses(P_LFO2_FADE),
+            "no preset uses LFO fade"
+        );
+        assert!(
+            uses(P_LFO1_ONESHOT) || uses(P_LFO2_ONESHOT),
+            "no preset uses LFO one-shot"
+        );
+    }
+
+    #[test]
+    fn lfo_wave_accepts_the_expanded_range() {
+        // Regression: the old clamp silently discarded waves 5-7.
+        let mut p = SynthParams::default();
+        apply_param(&mut p, LFO1_BASE + LFO_WAVE, 7.0);
+        assert_eq!(p.lfo1.wave, 7);
+        assert_eq!(param_value(&p, LFO1_BASE + LFO_WAVE), 7.0);
     }
 
     #[test]

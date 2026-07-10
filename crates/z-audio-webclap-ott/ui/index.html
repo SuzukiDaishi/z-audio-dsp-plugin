@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" style="--accent: #ffb45c; --accent-soft: rgba(255, 180, 92, 0.16)">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z Audio OTT</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="plugin-header">
+        <div class="title-row">
+          <h1>OTT</h1>
+          <p class="eyebrow">Z AUDIO EFFECT</p>
+        </div>
+        <div class="header-right">
+          <span id="status">Waiting for host</span>
+        </div>
+      </header>
+
+      <div class="viz" style="flex: none; min-height: 120px; height: 150px">
+        <canvas id="viz"></canvas>
+        <span class="viz-caption">Transfer curve per direction (in → out, dBFS)</span>
+      </div>
+
+      <div class="panels cols-2">
+        <section class="section" id="sec-dynamics">
+          <h2 class="section-title">Dynamics</h2>
+        </section>
+        <section class="section" id="sec-bands">
+          <h2 class="section-title">Bands</h2>
+        </section>
+      </div>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

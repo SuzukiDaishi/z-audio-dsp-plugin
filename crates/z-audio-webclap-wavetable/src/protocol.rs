@@ -8,8 +8,8 @@
 //!
 //! - `ZWTW` — waveform preview: magic · u8 osc (0=A, 1=B) · u16 sample
 //!   count `n` · n × f32 samples of the current morphed single cycle.
-//! - `ZWTM` — meter: magic · u8 active voices · f32 env1 · f32 env2 ·
-//!   f32 lfo1 · f32 lfo2.
+//! - `ZWTM` — meter: magic · u8 active voices · 8 × f32: env1, env2,
+//!   lfo1, lfo2, rnd1, rnd2, last velocity (0-1), note position (-1..1).
 //! - `ZWTS` — wavetable stack for the pseudo-3D view: magic · u8 osc ·
 //!   u8 frame count · u16 samples per frame · frames × samples f32,
 //!   frame 0 first. Sent on UI open and when the table selection changes.
@@ -43,14 +43,15 @@ pub fn encode_wave(osc_b: bool, samples: &[f32]) -> Vec<u8> {
     out
 }
 
-pub fn encode_meter(voices: u8, env1: f32, env2: f32, lfo1: f32, lfo2: f32) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + 1 + 16);
+pub fn encode_meter(voices: u8, m: &crate::engine::MeterFrame) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + 1 + 32);
     out.extend_from_slice(MAGIC_METER);
     out.push(voices);
-    out.extend_from_slice(&env1.to_le_bytes());
-    out.extend_from_slice(&env2.to_le_bytes());
-    out.extend_from_slice(&lfo1.to_le_bytes());
-    out.extend_from_slice(&lfo2.to_le_bytes());
+    for v in [
+        m.env1, m.env2, m.lfo1, m.lfo2, m.rnd1, m.rnd2, m.velocity, m.note,
+    ] {
+        out.extend_from_slice(&v.to_le_bytes());
+    }
     out
 }
 
@@ -107,12 +108,26 @@ mod tests {
 
     #[test]
     fn meter_packet_layout() {
-        let bytes = encode_meter(3, 0.5, 0.25, -1.0, 1.0);
+        let frame = crate::engine::MeterFrame {
+            env1: 0.5,
+            env2: 0.25,
+            lfo1: -1.0,
+            lfo2: 1.0,
+            rnd1: 0.75,
+            rnd2: -0.5,
+            velocity: 0.9,
+            note: -0.25,
+        };
+        let bytes = encode_meter(3, &frame);
         assert_eq!(&bytes[..4], MAGIC_METER);
         assert_eq!(bytes[4], 3);
-        assert_eq!(bytes.len(), 21);
-        let env1 = f32::from_le_bytes(bytes[5..9].try_into().unwrap());
-        assert_eq!(env1, 0.5);
+        assert_eq!(bytes.len(), 37);
+        let read = |at: usize| f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        assert_eq!(read(5), 0.5);
+        assert_eq!(read(21), 0.75);
+        assert_eq!(read(25), -0.5);
+        assert_eq!(read(29), 0.9);
+        assert_eq!(read(33), -0.25);
     }
 
     #[test]
@@ -124,7 +139,7 @@ mod tests {
         assert_eq!(parse_note_preview(b"ZWTN"), None);
         assert_eq!(parse_note_preview(b"ZWTMxxx"), None);
         assert_eq!(
-            parse_note_preview(&encode_meter(0, 0.0, 0.0, 0.0, 0.0)),
+            parse_note_preview(&encode_meter(0, &crate::engine::MeterFrame::default())),
             None
         );
     }

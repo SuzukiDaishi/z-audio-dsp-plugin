@@ -26,6 +26,7 @@
             <div class="panel-head">
               <h2 class="section-title">OSC A</h2>
               <div class="table-picker" id="osc-a-table"></div>
+              <span class="warp-pick" id="osc-a-warp" title="Warp mode"></span>
               <span class="head-toggle" id="osc-a-enable"></span>
             </div>
             <div class="viz wave-viz">
@@ -38,6 +39,7 @@
             <div class="panel-head">
               <h2 class="section-title">OSC B</h2>
               <div class="table-picker" id="osc-b-table"></div>
+              <span class="warp-pick" id="osc-b-warp" title="Warp mode"></span>
               <span class="head-toggle" id="osc-b-enable"></span>
             </div>
             <div class="viz wave-viz">
@@ -72,7 +74,7 @@
             <div class="viz env-viz">
               <canvas id="viz-env1"></canvas>
             </div>
-            <div class="knob-grid cols-5" id="env1-knobs"></div>
+            <div class="knob-grid cols-7" id="env1-knobs"></div>
           </section>
           <section class="section">
             <div class="panel-head">
@@ -82,12 +84,13 @@
             <div class="viz env-viz">
               <canvas id="viz-env2"></canvas>
             </div>
-            <div class="knob-grid cols-5" id="env2-knobs"></div>
+            <div class="knob-grid cols-7" id="env2-knobs"></div>
           </section>
           <section class="section">
             <div class="panel-head">
               <h2 class="section-title">LFO 1</h2>
               <span class="mod-chip" data-src="2" title="Drag onto a knob to assign LFO 1">LFO 1</span>
+              <span class="head-toggle" id="lfo1-oneshot"></span>
               <span class="head-toggle" id="lfo1-retrig"></span>
             </div>
             <div class="viz lfo-viz">
@@ -95,13 +98,14 @@
             </div>
             <div class="lfo-controls">
               <div id="lfo1-wave"></div>
-              <div class="knob-grid cols-2" id="lfo1-knobs"></div>
+              <div class="knob-grid cols-3" id="lfo1-knobs"></div>
             </div>
           </section>
           <section class="section">
             <div class="panel-head">
               <h2 class="section-title">LFO 2</h2>
               <span class="mod-chip" data-src="3" title="Drag onto a knob to assign LFO 2">LFO 2</span>
+              <span class="head-toggle" id="lfo2-oneshot"></span>
               <span class="head-toggle" id="lfo2-retrig"></span>
             </div>
             <div class="viz lfo-viz">
@@ -109,7 +113,77 @@
             </div>
             <div class="lfo-controls">
               <div id="lfo2-wave"></div>
-              <div class="knob-grid cols-2" id="lfo2-knobs"></div>
+              <div class="knob-grid cols-3" id="lfo2-knobs"></div>
+            </div>
+          </section>
+        </div>
+
+        <div class="panels cols-3 sources-row">
+          <section class="section" id="sec-rnd1">
+            <div class="panel-head">
+              <h2 class="section-title">RND 1</h2>
+              <span class="mod-chip" data-src="7" title="Drag onto a knob to assign Random 1">RND 1</span>
+              <span class="head-toggle" id="rnd1-retrig"></span>
+            </div>
+            <div class="viz rnd-viz">
+              <canvas id="viz-rnd1"></canvas>
+            </div>
+            <div class="lfo-controls">
+              <div id="rnd1-mode"></div>
+              <div class="knob-grid cols-1" id="rnd1-knobs"></div>
+            </div>
+          </section>
+          <section class="section" id="sec-rnd2">
+            <div class="panel-head">
+              <h2 class="section-title">RND 2</h2>
+              <span class="mod-chip" data-src="8" title="Drag onto a knob to assign Random 2">RND 2</span>
+              <span class="head-toggle" id="rnd2-retrig"></span>
+            </div>
+            <div class="viz rnd-viz">
+              <canvas id="viz-rnd2"></canvas>
+            </div>
+            <div class="lfo-controls">
+              <div id="rnd2-mode"></div>
+              <div class="knob-grid cols-1" id="rnd2-knobs"></div>
+            </div>
+          </section>
+          <section class="section" id="sec-sources">
+            <div class="panel-head">
+              <h2 class="section-title">Sources</h2>
+            </div>
+            <div class="source-tiles">
+              <div class="source-tile">
+                <span class="mod-chip" data-src="4" title="Drag onto a knob to assign note velocity">VEL</span>
+                <div class="viz source-bar-viz">
+                  <canvas id="viz-velo"></canvas>
+                </div>
+                <div class="knob-grid cols-1" id="velo-knobs"></div>
+              </div>
+              <div class="source-tile">
+                <span class="mod-chip" data-src="5" title="Drag onto a knob to assign note pitch">NOTE</span>
+                <div class="viz source-bar-viz">
+                  <canvas id="viz-note"></canvas>
+                </div>
+                <div class="knob-grid cols-2" id="note-knobs"></div>
+              </div>
+            </div>
+            <div class="macro-row">
+              <div class="macro-tile">
+                <span class="mod-chip" data-src="9" title="Drag onto a knob to assign Macro 1">M1</span>
+                <div class="knob-grid cols-1" id="macro1-knob"></div>
+              </div>
+              <div class="macro-tile">
+                <span class="mod-chip" data-src="10" title="Drag onto a knob to assign Macro 2">M2</span>
+                <div class="knob-grid cols-1" id="macro2-knob"></div>
+              </div>
+              <div class="macro-tile">
+                <span class="mod-chip" data-src="11" title="Drag onto a knob to assign Macro 3">M3</span>
+                <div class="knob-grid cols-1" id="macro3-knob"></div>
+              </div>
+              <div class="macro-tile">
+                <span class="mod-chip" data-src="12" title="Drag onto a knob to assign Macro 4">M4</span>
+                <div class="knob-grid cols-1" id="macro4-knob"></div>
+              </div>
             </div>
           </section>
         </div>
@@ -118,15 +192,22 @@
           <section class="section">
             <div class="panel-head">
               <h2 class="section-title">Mod Matrix</h2>
-              <span class="mod-chip" data-src="4" title="Drag onto a knob to assign note velocity">VEL</span>
-              <span class="mod-chip" data-src="5" title="Drag onto a knob to assign note pitch">NOTE</span>
-              <span class="matrix-hint">drag a source chip onto a knob · drag a knob's ring to set depth · double-click the ring to remove</span>
+              <span class="matrix-hint">drag a source chip or its curve onto a glowing knob · drag a badge to set depth · double-click a badge to remove</span>
             </div>
             <div id="matrix"></div>
+          </section>
+          <section class="section" id="sec-dist">
+            <div class="panel-head">
+              <h2 class="section-title">Distortion</h2>
+              <span class="head-toggle" id="dist-enable"></span>
+            </div>
+            <div id="dist-mode"></div>
+            <div class="knob-grid cols-2" id="dist-knobs"></div>
           </section>
           <section class="section">
             <div class="panel-head">
               <h2 class="section-title">Global</h2>
+              <span class="preset-pick" id="preset-mount" title="Factory presets"></span>
             </div>
             <div class="knob-grid cols-3" id="global-knobs"></div>
           </section>

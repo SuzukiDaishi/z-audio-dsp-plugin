@@ -14,6 +14,7 @@
 "use strict";
 
 import { connect, fmt, clamp, setupCanvas, markConnected } from "./zui.js";
+import { PRESET_GROUPS } from "./presets.js";
 
 // --- Parameter ids (mirror crates/z-audio-webclap-wavetable/src/params.rs) --
 
@@ -37,6 +38,8 @@ const P = {
   RAND_PHASE: 10,
   PAN: 11,
   LEVEL: 12,
+  WARP_MODE: 13,
+  WARP_AMT: 14,
   FILTER_ENABLE: 550,
   FILTER_TYPE: 551,
   CUTOFF: 552,
@@ -62,10 +65,78 @@ const P = {
   MOD_BASE: 580,
   MOD_FIELDS: 3,
   MOD_SLOTS: 8,
+  VEL_CURVE: 616,
+  NOTE_CENTER: 617,
+  NOTE_RANGE: 618,
+  RND1: 620,
+  RND2: 623,
+  RND_MODE: 0,
+  RND_RATE: 1,
+  RND_RETRIG: 2,
+  DIST_ENABLE: 604,
+  DIST_MODE: 605,
+  DIST_DRIVE: 606,
+  DIST_MIX: 607,
 };
 
-const TABLE_NAMES = ["Basic Shapes", "PWM", "Harmonic Sweep", "Metal Bell"];
-const MOD_SOURCES = ["None", "Env 2", "LFO 1", "LFO 2", "Velocity", "Note", "Env 1"];
+// Mirror of src/wavetable.rs table_name() — order and spelling must match
+// (guarded by the Rust test `ui_table_names_match_rust`).
+const TABLE_NAMES = [
+  "Basic Shapes",
+  "PWM",
+  "Harmonic Sweep",
+  "Metal Bell",
+  "Vowel Morph",
+  "Growl",
+  "FM Growl",
+  "Sync Saw",
+  "Digital Grit",
+  "Octave Stack",
+  "Soft Square",
+  "Tri Fold",
+  "Pulse Train",
+  "Choir Ahh",
+  "Vowel Talk",
+  "Throat",
+  "Bit Steps",
+  "Sync Square",
+  "VOSIM",
+  "FM Bell",
+  "FM Bass",
+  "FM Fold",
+  "Glass",
+  "Gamelan",
+  "Drawbars",
+  "Even/Odd",
+  "Pipe Organ",
+  "String Machine",
+  "Pluck String",
+  "Breath",
+  "Spectral Noise",
+  "Solid Sub",
+];
+const WARP_MODES = [
+  "Warp Off",
+  "Bend +",
+  "Bend −",
+  "Sync",
+  "Mirror",
+  "Squeeze",
+  "Quantize",
+  "FM (other)",
+  "RM (other)",
+  "AM (other)",
+];
+const DIST_MODES = ["Tanh", "Hard", "Fold", "Sine", "Crush"];
+const RND_MODES = ["S&H", "Smooth", "Drift", "Chaos"];
+// Absolute ids of the DAHDSR / LFO extensions (the 560s/570s blocks were
+// full, so these live in the append-only 608+ range).
+const ENV_EXTRA = { 560: { delay: 608, hold: 609 }, 565: { delay: 610, hold: 611 } };
+const LFO_EXTRA = { 570: { fade: 612, oneShot: 613 }, 574: { fade: 614, oneShot: 615 } };
+const MOD_SOURCES = [
+  "None", "Env 2", "LFO 1", "LFO 2", "Velocity", "Note", "Env 1", "Rnd 1", "Rnd 2",
+  "Macro 1", "Macro 2", "Macro 3", "Macro 4",
+];
 const MOD_COLORS = [
   "#7e93a3", // none (unused)
   "#ff8a5c", // env 2
@@ -74,6 +145,12 @@ const MOD_COLORS = [
   "#9dffb0", // velocity
   "#ff9bd4", // note
   "#f6c945", // env 1
+  "#5cffc4", // rnd 1
+  "#ffb45c", // rnd 2
+  "#7cc4ff", // macro 1
+  "#e08aff", // macro 2
+  "#8affa0", // macro 3
+  "#ffd45c", // macro 4
 ];
 const MOD_DESTS = [
   "None",
@@ -88,6 +165,11 @@ const MOD_DESTS = [
   "Cutoff",
   "Reso",
   "Master",
+  "A Warp",
+  "B Warp",
+  "Dist Drive",
+  "A Detune",
+  "B Detune",
 ];
 
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -240,7 +322,7 @@ function clearMod(base) {
   setParam(base + 2, 0);
 }
 
-/** Live source value for ring animation (null for velocity/note). */
+/** Live source value for ring/badge animation. */
 function liveModValue(src) {
   switch (src) {
     case 1:
@@ -249,8 +331,22 @@ function liveModValue(src) {
       return state.lfo1;
     case 3:
       return state.lfo2;
+    case 4:
+      return state.velo;
+    case 5:
+      return state.note;
     case 6:
       return state.env1;
+    case 7:
+      return state.rnd1;
+    case 8:
+      return state.rnd2;
+    // Macros are unmodulated params — their live value IS the knob value.
+    case 9:
+    case 10:
+    case 11:
+    case 12:
+      return val(626 + (src - 9));
     default:
       return null;
   }
@@ -301,7 +397,11 @@ function makeKnob(def) {
   const label = document.createElement("span");
   label.className = "knob-label";
   label.textContent = def.label;
-  root.append(canvas, label);
+  // Fixed-height badge strip on every knob (moddable or not) keeps the
+  // knob grids aligned; badges only ever appear on `def.dest` knobs.
+  const badges = document.createElement("div");
+  badges.className = "mod-badges";
+  root.append(canvas, label, badges);
 
   let value = def.default;
   const format = def.fmt || fmt.plain;
@@ -496,11 +596,26 @@ function makeKnob(def) {
   });
 
   requestAnimationFrame(draw);
-  // Live mod-ring animation rides the shared invalidate() pass (driven by
-  // the ~30 Hz meter packets) but only when this knob is modulated.
+  // Live mod-ring animation + badge sync ride the shared invalidate()
+  // pass (driven by the ~30 Hz meter packets). The `hadMods` latch also
+  // repaints once after the last assignment is cleared, so no stale ring
+  // survives a matrix-select removal.
   if (def.dest) {
+    let badgeSig = "";
+    const refreshBadges = (mods) => {
+      // Amount is deliberately not part of the signature: depth drags
+      // must never rebuild the badge that is being dragged.
+      const sig = mods.map((m) => `${m.base}:${m.src}`).join("|");
+      if (sig === badgeSig) return;
+      badgeSig = sig;
+      badges.replaceChildren(...mods.map((m) => makeModBadge(m.base, m.src, def)));
+    };
+    let hadMods = false;
     redrawFns.push(() => {
-      if (modsForDest(def.dest).length) draw();
+      const mods = modsForDest(def.dest);
+      refreshBadges(mods);
+      if (mods.length || hadMods) draw();
+      hadMods = mods.length > 0;
     });
   }
   register(def, {
@@ -575,6 +690,32 @@ function makeSegmented(def) {
   return root;
 }
 
+/** Registered <select> — used for the per-osc warp mode picker. */
+function makeSelect(def) {
+  const select = document.createElement("select");
+  for (const [i, name] of def.options.entries()) select.add(new Option(name, i));
+  let value = def.default;
+  const render = () => {
+    select.value = String(Math.round(value));
+    select.classList.toggle("engaged", Math.round(value) > 0);
+  };
+  select.addEventListener("change", () => {
+    value = Number(select.value);
+    render();
+    sendSet(def.id, value);
+    invalidate();
+  });
+  render();
+  register(def, {
+    get: () => value,
+    set: (v) => {
+      value = v;
+      render();
+    },
+  });
+  return select;
+}
+
 function makeTablePicker(def) {
   const root = document.createElement("div");
   root.className = "table-picker";
@@ -583,14 +724,17 @@ function makeTablePicker(def) {
   prev.textContent = "‹";
   const name = document.createElement("span");
   name.className = "table-name";
+  const index = document.createElement("span");
+  index.className = "table-index";
   const next = document.createElement("button");
   next.type = "button";
   next.textContent = "›";
-  root.append(prev, name, next);
+  root.append(prev, name, index, next);
 
   let value = def.default;
   const render = () => {
     name.textContent = def.options[Math.round(value)] || "?";
+    index.textContent = `${Math.round(value) + 1}/${def.options.length}`;
   };
   const bump = (dir) => {
     value = (Math.round(value) + dir + def.options.length) % def.options.length;
@@ -636,12 +780,22 @@ function buildOsc(base, prefix) {
       return picker;
     })(),
   );
-  const knobs = $id(`${prefix}-knobs`);
   const isA = base === P.OSC_A;
+  $id(`${prefix}-warp`).append(
+    makeSelect({
+      id: at(P.WARP_MODE),
+      options: WARP_MODES,
+      min: 0,
+      max: WARP_MODES.length - 1,
+      default: 0,
+    }),
+  );
+  const knobs = $id(`${prefix}-knobs`);
   const defs = [
     { id: at(P.WT_POS), label: "WT Pos", min: 0, max: 1, default: 0, fmt: fmt.pct, dest: isA ? 1 : 5 },
+    { id: at(P.WARP_AMT), label: "Warp", min: 0, max: 1, default: 0, fmt: fmt.pct, dest: isA ? 12 : 13 },
     { id: at(P.UNISON), label: "Unison", min: 1, max: 8, default: 1, step: 1, fmt: fmt.int },
-    { id: at(P.UNI_DETUNE), label: "Detune", min: 0, max: 1, default: 0.25, fmt: fmt.pct },
+    { id: at(P.UNI_DETUNE), label: "Detune", min: 0, max: 1, default: 0.25, fmt: fmt.pct, dest: isA ? 15 : 16 },
     { id: at(P.UNI_BLEND), label: "Blend", min: 0, max: 1, default: 0.75, fmt: fmt.pct },
     { id: at(P.PHASE), label: "Phase", min: 0, max: 1, default: 0, fmt: fmt.pct },
     { id: at(P.RAND_PHASE), label: "Rand", min: 0, max: 1, default: 1, fmt: fmt.pct },
@@ -665,9 +819,9 @@ $id("filter-enable").append(
 $id("filter-type").append(
   makeSegmented({
     id: P.FILTER_TYPE,
-    options: ["LP12", "LP24", "HP12", "BP12"],
+    options: ["LP12", "LP24", "HP12", "BP12", "NT12", "CB+", "CB−", "FMT"],
     min: 0,
-    max: 3,
+    max: 7,
     default: 0,
   }),
 );
@@ -685,9 +839,12 @@ $id("route-b").append(makeSwitch({ id: P.ROUTE_B, label: "B → Filt", min: 0, m
 
 function buildEnv(base, mountId, sustainDefault) {
   const at = (o) => base + o;
+  const extra = ENV_EXTRA[base];
   const knobs = $id(mountId);
   for (const def of [
+    { id: extra.delay, label: "Del", min: 0, max: 2, default: 0, scale: "pow2", fmt: fmt.s },
     { id: at(P.ATTACK), label: "Atk", min: 0, max: 5, default: 0.005, scale: "pow2", fmt: fmt.s },
+    { id: extra.hold, label: "Hold", min: 0, max: 2, default: 0, scale: "pow2", fmt: fmt.s },
     { id: at(P.DECAY), label: "Dec", min: 0, max: 5, default: 0.2, scale: "pow2", fmt: fmt.s },
     { id: at(P.SUSTAIN), label: "Sus", min: 0, max: 1, default: sustainDefault, fmt: fmt.pct },
     { id: at(P.RELEASE), label: "Rel", min: 0, max: 5, default: 0.15, scale: "pow2", fmt: fmt.s },
@@ -702,15 +859,20 @@ buildEnv(P.ENV2, "env2-knobs", 0.5);
 
 function buildLfo(base, prefix) {
   const at = (o) => base + o;
+  const extra = LFO_EXTRA[base];
   $id(`${prefix}-retrig`).append(
     makeSwitch({ id: at(P.RETRIG), label: "Retrig", min: 0, max: 1, default: 1 }),
   );
+  $id(`${prefix}-oneshot`).append(
+    makeSwitch({ id: extra.oneShot, label: "1-Shot", min: 0, max: 1, default: 0 }),
+  );
+  // 8 waves no longer fit as segmented buttons — a compact select does.
   $id(`${prefix}-wave`).append(
-    makeSegmented({
+    makeSelect({
       id: at(P.WAVE),
-      options: ["Sin", "Tri", "Saw", "Sqr", "S&H"],
+      options: ["Sine", "Triangle", "Saw Up", "Square", "S&H", "Ramp Down", "Pulse 25%", "Smooth S&H"],
       min: 0,
-      max: 4,
+      max: 7,
       default: 0,
     }),
   );
@@ -720,7 +882,7 @@ function buildLfo(base, prefix) {
       id: at(P.RATE),
       label: "Rate",
       min: 0.01,
-      max: 20,
+      max: 50,
       default: 2,
       scale: "log",
       fmt: fmt.hzLfo,
@@ -735,14 +897,211 @@ function buildLfo(base, prefix) {
       fmt: fmt.pct,
       small: true,
     }),
+    makeKnob({
+      id: extra.fade,
+      label: "Fade",
+      min: 0,
+      max: 5,
+      default: 0,
+      scale: "pow2",
+      fmt: fmt.s,
+      small: true,
+    }),
   );
 }
 
 buildLfo(P.LFO1, "lfo1");
 buildLfo(P.LFO2, "lfo2");
 
+// --- Random modulators (Vital-style) -------------------------------------------
+
+function drawRnd(canvas, histIndex, srcIndex) {
+  const ctx = canvas.getContext("2d");
+  const { width: w, height: h } = canvas;
+  ctx.clearRect(0, 0, w, h);
+  const color = MOD_COLORS[srcIndex];
+  const midY = h / 2;
+
+  ctx.strokeStyle = "rgba(126, 147, 163, 0.22)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, midY);
+  ctx.lineTo(w, midY);
+  ctx.stroke();
+
+  const hist = state.rndHist[histIndex];
+  if (hist.length > 1) {
+    ctx.beginPath();
+    for (let i = 0; i < hist.length; i++) {
+      const x = (i / (RND_HIST_LEN - 1)) * w;
+      const y = midY - clamp(hist[i], -1, 1) * (h * 0.42);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1.5, h / 36);
+    ctx.stroke();
+  }
+
+  // Live dot rides the newest sample.
+  const live = hist.length ? hist[hist.length - 1] : 0;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(
+    ((hist.length - 1) / (RND_HIST_LEN - 1)) * w,
+    midY - clamp(live, -1, 1) * (h * 0.42),
+    Math.max(2.5, h / 20),
+    0,
+    Math.PI * 2,
+  );
+  ctx.fill();
+}
+
+function buildRnd(base, prefix, srcIndex, histIndex) {
+  $id(`${prefix}-retrig`).append(
+    makeSwitch({ id: base + P.RND_RETRIG, label: "Retrig", min: 0, max: 1, default: 1 }),
+  );
+  $id(`${prefix}-mode`).append(
+    makeSegmented({
+      id: base + P.RND_MODE,
+      options: RND_MODES,
+      min: 0,
+      max: RND_MODES.length - 1,
+      default: 0,
+    }),
+  );
+  $id(`${prefix}-knobs`).append(
+    makeKnob({
+      id: base + P.RND_RATE,
+      label: "Rate",
+      min: 0.01,
+      max: 50,
+      default: 2,
+      scale: "log",
+      fmt: fmt.hzLfo,
+      small: true,
+    }),
+  );
+  const canvas = $id(`viz-${prefix}`);
+  const view = setupCanvas(canvas, () => drawRnd(canvas, histIndex, srcIndex));
+  redrawFns.push(view.redraw);
+  // The trace is a drag source, like the LFO curves.
+  canvas.addEventListener("pointerdown", (e) => {
+    beginModDrag(canvas, srcIndex, e, { x: e.clientX, y: e.clientY });
+  });
+}
+
+buildRnd(P.RND1, "rnd1", 7, 0);
+buildRnd(P.RND2, "rnd2", 8, 1);
+
+// --- Velocity / Note source tiles ------------------------------------------------
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const fmtNote = (v) => {
+  const key = Math.round(v);
+  return `${NOTE_NAMES[key % 12]}${Math.floor(key / 12) - 1}`;
+};
+
+function wireSourceBar(canvasId, valueKey, bipolar, srcIndex) {
+  const canvas = $id(canvasId);
+  const draw = () => {
+    const ctx = canvas.getContext("2d");
+    const { width: w, height: h } = canvas;
+    ctx.clearRect(0, 0, w, h);
+    const color = MOD_COLORS[srcIndex];
+    ctx.fillStyle = "rgba(126, 147, 163, 0.15)";
+    ctx.fillRect(0, 0, w, h);
+    const v = clamp(state[valueKey], bipolar ? -1 : 0, 1);
+    ctx.fillStyle = color;
+    if (bipolar) {
+      const mid = w / 2;
+      const span = v * (w / 2);
+      ctx.fillRect(Math.min(mid, mid + span), 0, Math.abs(span), h);
+      ctx.fillStyle = "rgba(126, 147, 163, 0.5)";
+      ctx.fillRect(mid - 0.5, 0, 1, h);
+    } else {
+      ctx.fillRect(0, 0, v * w, h);
+    }
+  };
+  const view = setupCanvas(canvas, draw);
+  redrawFns.push(view.redraw);
+}
+
+wireSourceBar("viz-velo", "velo", false, 4);
+wireSourceBar("viz-note", "note", true, 5);
+
+$id("velo-knobs").append(
+  makeKnob({
+    id: P.VEL_CURVE,
+    label: "Curve",
+    min: -1,
+    max: 1,
+    default: 0,
+    bipolar: true,
+    fmt: fmt.plain,
+    small: true,
+  }),
+);
+$id("note-knobs").append(
+  makeKnob({
+    id: P.NOTE_CENTER,
+    label: "Center",
+    min: 0,
+    max: 127,
+    default: 60,
+    step: 1,
+    fmt: fmtNote,
+    small: true,
+  }),
+  makeKnob({
+    id: P.NOTE_RANGE,
+    label: "Range",
+    min: 1,
+    max: 64,
+    default: 32,
+    step: 1,
+    fmt: fmtSt,
+    small: true,
+  }),
+);
+
+// --- Macros (Vital-style performance knobs, sources 9-12) -----------------------
+
+for (let m = 0; m < 4; m++) {
+  $id(`macro${m + 1}-knob`).append(
+    makeKnob({
+      id: 626 + m,
+      label: `Macro ${m + 1}`,
+      min: 0,
+      max: 1,
+      default: 0,
+      fmt: fmt.pct,
+      small: true,
+    }),
+  );
+}
+
 $id("master-mount").append(
   makeKnob({ id: P.MASTER, label: "Master", min: 0, max: 1, default: 0.8, fmt: fmt.pct, dest: 11 }),
+);
+
+// --- Distortion (global, post-voice-sum) --------------------------------------
+
+$id("dist-enable").append(
+  makeSwitch({ id: P.DIST_ENABLE, label: "On", min: 0, max: 1, default: 0 }),
+);
+$id("dist-mode").append(
+  makeSegmented({
+    id: P.DIST_MODE,
+    options: DIST_MODES,
+    min: 0,
+    max: DIST_MODES.length - 1,
+    default: 0,
+  }),
+);
+$id("dist-knobs").append(
+  makeKnob({ id: P.DIST_DRIVE, label: "Drive", min: 0, max: 1, default: 0.3, fmt: fmt.pct, dest: 14 }),
+  makeKnob({ id: P.DIST_MIX, label: "Mix", min: 0, max: 1, default: 1, fmt: fmt.pct }),
 );
 for (const def of [
   { id: P.POLYPHONY, label: "Voices", min: 1, max: 16, default: 8, step: 1, fmt: fmt.int },
@@ -750,6 +1109,38 @@ for (const def of [
   { id: P.GLIDE, label: "Glide", min: 0, max: 2, default: 0, scale: "pow2", fmt: fmt.s },
 ]) {
   $id("global-knobs").append(makeKnob(def));
+}
+
+// --- Factory presets ------------------------------------------------------------
+//
+// The preset bank lives in presets.js (validated against the Rust param
+// surface by the `factory_presets_are_valid` test). Each preset is a diff
+// against Init: applying one resets every registered param to its default
+// first, then overlays the map.
+
+const PRESETS = PRESET_GROUPS.flatMap((group) => group.presets);
+
+function applyPreset(index) {
+  const preset = PRESETS[index];
+  if (!preset) return;
+  for (const [id, c] of registry) setParam(id, c.def.default);
+  for (const [id, v] of Object.entries(preset.set)) setParam(Number(id), v);
+}
+
+{
+  const select = document.createElement("select");
+  let index = 0;
+  for (const group of PRESET_GROUPS) {
+    const bucket = document.createElement("optgroup");
+    bucket.label = group.name;
+    for (const preset of group.presets) {
+      bucket.append(new Option(preset.name, index));
+      index += 1;
+    }
+    select.append(bucket);
+  }
+  select.addEventListener("change", () => applyPreset(Number(select.value)));
+  $id("preset-mount").append(select);
 }
 
 // --- Mod matrix -----------------------------------------------------------------------
@@ -760,6 +1151,7 @@ function buildMatrix() {
     const base = P.MOD_BASE + slot * P.MOD_FIELDS;
     const row = document.createElement("div");
     row.className = "matrix-row";
+    row.dataset.base = String(base);
 
     const index = document.createElement("span");
     index.className = "slot-index";
@@ -790,24 +1182,30 @@ function buildMatrix() {
         Number(source.value) > 0 && Number(dest.value) > 0 && Number(amount.value) !== 0,
       );
 
+    // invalidate() keeps the knob rings/badges in lockstep with matrix
+    // edits (they are all views of the same slot params).
     source.addEventListener("change", () => {
       sendSet(base + 0, Number(source.value));
       engage();
+      invalidate();
     });
     dest.addEventListener("change", () => {
       sendSet(base + 1, Number(dest.value));
       engage();
+      invalidate();
     });
     amount.addEventListener("input", () => {
       readout.textContent = `${amount.value} %`;
       sendSet(base + 2, Number(amount.value) / 100);
       engage();
+      invalidate();
     });
     amount.addEventListener("dblclick", () => {
       amount.value = 0;
       readout.textContent = "0 %";
       sendSet(base + 2, 0);
       engage();
+      invalidate();
     });
 
     row.append(index, source, dest, amountWrap, readout);
@@ -857,12 +1255,64 @@ buildMatrix();
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-function beginModDrag(chip, src, event) {
-  event.preventDefault();
-  chip.setPointerCapture(event.pointerId);
-  document.body.classList.add("mod-drag");
+/** Every assignable element on screen, with its snap geometry. Knob roots
+ * delegate to their canvas so labels/badges don't skew the snap point. */
+function collectDropTargets() {
+  const targets = [];
+  for (const el of document.querySelectorAll("[data-dest]")) {
+    const box = el.classList.contains("knob") ? el.querySelector("canvas") || el : el;
+    const rect = box.getBoundingClientRect();
+    targets.push({
+      el,
+      dest: Number(el.dataset.dest),
+      cx: rect.left + rect.width / 2,
+      cy: rect.top + rect.height / 2,
+      rect,
+    });
+  }
+  return targets;
+}
 
+/** Snap resolution: a target whose rect contains the pointer wins
+ * (smallest area first, so knobs beat the big canvases they overlap),
+ * otherwise the nearest center within `radius` px. */
+function nearestTarget(targets, x, y, radius = 52) {
+  let inside = null;
+  for (const t of targets) {
+    const { rect } = t;
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      if (!inside || rect.width * rect.height < inside.rect.width * inside.rect.height) {
+        inside = t;
+      }
+    }
+  }
+  if (inside) return inside;
+  let best = null;
+  let bestDist = radius;
+  for (const t of targets) {
+    const dist = Math.hypot(x - t.cx, y - t.cy);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = t;
+    }
+  }
+  return best;
+}
+
+/**
+ * Starts a mod-assignment drag from `anchor` (a chip or an env/lfo canvas).
+ * While dragging, every [data-dest] element pulses, the line snaps to the
+ * nearest target, and dropping calls assignMod. `origin` overrides the
+ * line's start point (canvas sources start at the pointer).
+ */
+function beginModDrag(anchor, src, event, origin = null) {
+  event.preventDefault();
+  setSourceHighlight(src, false);
+  anchor.setPointerCapture(event.pointerId);
   const color = MOD_COLORS[src] || css("--accent");
+  document.body.classList.add("mod-drag");
+  document.body.style.setProperty("--drag-color", color);
+
   const overlay = document.createElementNS(SVG_NS, "svg");
   overlay.setAttribute("class", "mod-drag-overlay");
   const line = document.createElementNS(SVG_NS, "line");
@@ -875,64 +1325,164 @@ function beginModDrag(chip, src, event) {
   overlay.append(line, dot);
   document.body.append(overlay);
 
-  const rect = chip.getBoundingClientRect();
-  const x0 = rect.left + rect.width / 2;
-  const y0 = rect.top + rect.height / 2;
-  line.setAttribute("x1", String(x0));
-  line.setAttribute("y1", String(y0));
+  const start = origin || (() => {
+    const rect = anchor.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })();
+  line.setAttribute("x1", String(start.x));
+  line.setAttribute("y1", String(start.y));
 
-  let hover = null;
-  const targetAt = (e) => {
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    return el && el.closest ? el.closest("[data-dest]") : null;
+  let targets = collectDropTargets();
+  let snapped = null;
+  // Wheel-scrolling mid-drag would stale the cached rects.
+  const recollect = () => {
+    targets = collectDropTargets();
+  };
+  document.addEventListener("scroll", recollect, true);
+
+  const setSnap = (target) => {
+    if (target === snapped) return;
+    if (snapped) snapped.el.classList.remove("mod-drop-snap");
+    snapped = target;
+    if (snapped) snapped.el.classList.add("mod-drop-snap");
   };
   const track = (e) => {
-    line.setAttribute("x2", String(e.clientX));
-    line.setAttribute("y2", String(e.clientY));
-    dot.setAttribute("cx", String(e.clientX));
-    dot.setAttribute("cy", String(e.clientY));
-    const target = targetAt(e);
-    if (target !== hover) {
-      if (hover) hover.classList.remove("mod-drop-hover");
-      hover = target;
-      if (hover) hover.classList.add("mod-drop-hover");
+    const target = nearestTarget(targets, e.clientX, e.clientY);
+    setSnap(target);
+    const ex = target ? target.cx : e.clientX;
+    const ey = target ? target.cy : e.clientY;
+    line.setAttribute("x2", String(ex));
+    line.setAttribute("y2", String(ey));
+    dot.setAttribute("cx", String(ex));
+    dot.setAttribute("cy", String(ey));
+    if (target) {
+      showTip(target.cx + 12, target.cy, `${MOD_SOURCES[src]} → ${MOD_DESTS[target.dest]}`);
+    } else {
+      hideTip();
     }
   };
   track(event);
 
   const finish = (e) => {
-    if (chip.hasPointerCapture?.(e.pointerId)) chip.releasePointerCapture(e.pointerId);
+    if (anchor.hasPointerCapture?.(e.pointerId)) anchor.releasePointerCapture(e.pointerId);
     overlay.remove();
     document.body.classList.remove("mod-drag");
-    if (hover) hover.classList.remove("mod-drop-hover");
-    chip.removeEventListener("pointermove", track);
-    chip.removeEventListener("pointerup", drop);
-    chip.removeEventListener("pointercancel", finish);
+    document.body.style.removeProperty("--drag-color");
+    document.removeEventListener("scroll", recollect, true);
+    setSnap(null);
+    anchor.removeEventListener("pointermove", track);
+    anchor.removeEventListener("pointerup", drop);
+    anchor.removeEventListener("pointercancel", finish);
   };
   const drop = (e) => {
-    const target = targetAt(e);
+    const target = snapped;
     finish(e);
-    if (!target) return;
-    const dest = Number(target.dataset.dest);
-    const base = assignMod(src, dest);
+    if (!target) {
+      hideTip();
+      return;
+    }
+    const base = assignMod(src, target.dest);
     showTip(
-      e.clientX,
-      e.clientY,
+      target.cx + 12,
+      target.cy,
       base < 0
         ? "Mod matrix full (8 slots)"
-        : `${MOD_SOURCES[src]} → ${MOD_DESTS[dest]}: ${Math.round(val(base + 2) * 100)} %`,
+        : `${MOD_SOURCES[src]} → ${MOD_DESTS[target.dest]}: ${Math.round(val(base + 2) * 100)} %`,
     );
     setTimeout(hideTip, 1400);
   };
-  chip.addEventListener("pointermove", track);
-  chip.addEventListener("pointerup", drop);
-  chip.addEventListener("pointercancel", finish);
+  anchor.addEventListener("pointermove", track);
+  anchor.addEventListener("pointerup", drop);
+  anchor.addEventListener("pointercancel", finish);
+}
+
+/** One colored dot per assignment under a modulated knob: hover shows
+ * the connection, vertical drag edits the depth, double-click removes. */
+function makeModBadge(base, src, def) {
+  const badge = document.createElement("span");
+  badge.className = "mod-badge";
+  badge.style.setProperty("--badge-color", MOD_COLORS[src] || css("--accent"));
+  const tip = (e) =>
+    showTip(
+      e.clientX,
+      e.clientY,
+      `${MOD_SOURCES[src]} → ${def.label}: ${Math.round(val(base + 2) * 100)} %`,
+    );
+
+  let dragging = false;
+  let dragY = 0;
+  let amount = 0;
+  badge.addEventListener("pointerenter", (e) => {
+    tip(e);
+    chipFor(src)?.classList.add("mod-chip-hot");
+    matrixRowFor(base)?.classList.add("mod-hot");
+  });
+  badge.addEventListener("pointerleave", () => {
+    if (!dragging) hideTip();
+    chipFor(src)?.classList.remove("mod-chip-hot");
+    matrixRowFor(base)?.classList.remove("mod-hot");
+  });
+  badge.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    badge.setPointerCapture(e.pointerId);
+    dragging = true;
+    dragY = e.clientY;
+    amount = val(base + 2);
+    tip(e);
+  });
+  badge.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const range = e.shiftKey ? 1600 : 160;
+    amount = clamp(amount + (dragY - e.clientY) / range, -1, 1);
+    dragY = e.clientY;
+    setParam(base + 2, amount);
+    tip(e);
+  });
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    if (badge.hasPointerCapture?.(e.pointerId)) badge.releasePointerCapture(e.pointerId);
+    hideTip();
+  };
+  badge.addEventListener("pointerup", endDrag);
+  badge.addEventListener("pointercancel", endDrag);
+  badge.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    clearMod(base);
+    hideTip();
+  });
+  return badge;
+}
+
+// --- Hover cross-highlighting ------------------------------------------------
+
+function chipFor(src) {
+  return document.querySelector(`.mod-chip[data-src="${src}"]`);
+}
+
+function matrixRowFor(base) {
+  return document.querySelector(`.matrix-row[data-base="${base}"]`);
+}
+
+/** Glow every knob/canvas currently modulated by `src` (chip hover). */
+function setSourceHighlight(src, on) {
+  if (on && document.body.classList.contains("mod-drag")) return;
+  const color = MOD_COLORS[src] || css("--accent");
+  for (const el of document.querySelectorAll("[data-dest]")) {
+    const hit = on && modsForDest(Number(el.dataset.dest)).some((m) => m.src === src);
+    el.classList.toggle("mod-hot", hit);
+    if (hit) el.style.setProperty("--mod-hot-color", color);
+    else el.style.removeProperty("--mod-hot-color");
+  }
 }
 
 for (const chip of document.querySelectorAll(".mod-chip")) {
   const src = Number(chip.dataset.src);
   chip.style.setProperty("--chip-color", MOD_COLORS[src] || "#7e93a3");
   chip.addEventListener("pointerdown", (e) => beginModDrag(chip, src, e));
+  chip.addEventListener("pointerenter", () => setSourceHighlight(src, true));
+  chip.addEventListener("pointerleave", () => setSourceHighlight(src, false));
 }
 
 // --- Live packet state --------------------------------------------------------------------
@@ -944,8 +1494,15 @@ const state = {
   env2: 0,
   lfo1: 0,
   lfo2: 0,
+  rnd1: 0,
+  rnd2: 0,
+  velo: 0,
+  note: 0,
   voices: 0,
+  // ~3 s of RND history at the 30 Hz meter rate, for the trace views.
+  rndHist: [[], []],
 };
+const RND_HIST_LEN = 90;
 
 // --- Oscillator stack view -------------------------------------------------------------------
 
@@ -1066,15 +1623,52 @@ wireOscCanvas("viz-osc-b", P.OSC_B);
 const FREQ_LO = Math.log(20);
 const FREQ_HI = Math.log(20000);
 
+// Mirrors src/wavetable.rs VOWEL_FORMANTS / vowel_at for the formant curve.
+const VOWEL_FORMANTS = [
+  [730, 1090, 2440],
+  [530, 1840, 2480],
+  [270, 2290, 3010],
+  [570, 840, 2410],
+  [300, 870, 2240],
+];
+const VOWEL_AMPS = [1.0, 0.63, 0.32];
+
+function vowelFreqsAt(pos) {
+  const x = clamp(pos, 0, 1) * (VOWEL_FORMANTS.length - 1);
+  const i0 = Math.min(Math.floor(x), VOWEL_FORMANTS.length - 2);
+  const t = x - i0;
+  return VOWEL_FORMANTS[i0].map((a, k) => a + (VOWEL_FORMANTS[i0 + 1][k] - a) * t);
+}
+
 function filterMagnitudeDb(freq, cutoff, reso, type) {
-  const s = freq / Math.max(cutoff, 1);
   const k = 2 - 1.9 * clamp(reso, 0, 1);
-  const denom = Math.sqrt((1 - s * s) ** 2 + (k * s) ** 2);
+  const svf = (fc, kind) => {
+    const s = freq / Math.max(fc, 1);
+    const denom = Math.sqrt((1 - s * s) ** 2 + (k * s) ** 2);
+    if (kind === "lp") return 1 / denom;
+    if (kind === "hp") return (s * s) / denom;
+    if (kind === "bp") return (k * s) / denom;
+    return Math.abs(1 - s * s) / denom; // notch
+  };
   let mag;
-  if (type === 0) mag = 1 / denom;
-  else if (type === 1) mag = 1 / (denom * denom);
-  else if (type === 2) mag = (s * s) / denom;
-  else mag = (k * s) / denom;
+  if (type === 0) mag = svf(cutoff, "lp");
+  else if (type === 1) mag = svf(cutoff, "lp") ** 2;
+  else if (type === 2) mag = svf(cutoff, "hp");
+  else if (type === 3) mag = svf(cutoff, "bp");
+  else if (type === 4) mag = svf(cutoff, "nt");
+  else if (type === 5 || type === 6) {
+    // Feedback comb ripple: |H| = comp / |1 ∓ fb·e^{-jωd}| with d = sr/fc.
+    const fb = 0.5 + 0.48 * clamp(reso, 0, 1);
+    const phase = (2 * Math.PI * freq) / Math.max(cutoff, 1);
+    const sign = type === 5 ? 1 : -1;
+    const re = 1 - sign * fb * Math.cos(phase);
+    const im = sign * fb * Math.sin(phase);
+    mag = (1 - 0.5 * fb) / Math.max(Math.hypot(re, im), 1e-4);
+  } else {
+    // Formant: sum of three band-passes at the vowel's F1/F2/F3.
+    const t = (Math.log(clamp(cutoff, 200, 4000)) - Math.log(200)) / (Math.log(4000) - Math.log(200));
+    mag = vowelFreqsAt(t).reduce((acc, fc, i) => acc + svf(fc, "bp") * VOWEL_AMPS[i], 0);
+  }
   return 20 * Math.log10(Math.max(mag, 1e-6));
 }
 
@@ -1176,17 +1770,22 @@ function envShape(x, curve) {
 const SUSTAIN_W = 0.16; // fixed visual plateau fraction
 
 function envGeometry(base, w, h) {
+  const extra = ENV_EXTRA[base];
+  const del = val(extra.delay);
   const a = val(base + P.ATTACK);
+  const hold = val(extra.hold);
   const d = val(base + P.DECAY);
   const s = val(base + P.SUSTAIN);
   const r = val(base + P.RELEASE);
-  const total = Math.max(a + d + r, 1e-3);
+  const total = Math.max(del + a + hold + d + r, 1e-3);
+  const delx = (del / total) * (1 - SUSTAIN_W);
   const ax = (a / total) * (1 - SUSTAIN_W);
+  const hx = (hold / total) * (1 - SUSTAIN_W);
   const dx = (d / total) * (1 - SUSTAIN_W);
   const rx = (r / total) * (1 - SUSTAIN_W);
   const pad = h * 0.1;
   const y = (v) => h - pad - v * (h - 2 * pad);
-  return { a, d, s, r, total, ax, dx, rx, y, pad };
+  return { del, a, hold, d, s, r, total, delx, ax, hx, dx, rx, y, pad };
 }
 
 function drawEnv(canvas, base, level) {
@@ -1199,25 +1798,28 @@ function drawEnv(canvas, base, level) {
 
   ctx.beginPath();
   ctx.moveTo(0, g.y(0));
+  ctx.lineTo(g.delx * w, g.y(0)); // delay: flat at zero
   const steps = 28;
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    ctx.lineTo(t * g.ax * w, g.y(envShape(t, curve)));
+    ctx.lineTo((g.delx + t * g.ax) * w, g.y(envShape(t, curve)));
   }
+  ctx.lineTo((g.delx + g.ax + g.hx) * w, g.y(1)); // hold: flat at peak
+  const decayX = g.delx + g.ax + g.hx;
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    ctx.lineTo((g.ax + t * g.dx) * w, g.y(g.s + (1 - g.s) * envShape(1 - t, curve)));
+    ctx.lineTo((decayX + t * g.dx) * w, g.y(g.s + (1 - g.s) * envShape(1 - t, curve)));
   }
-  ctx.lineTo((g.ax + g.dx + SUSTAIN_W) * w, g.y(g.s));
+  ctx.lineTo((decayX + g.dx + SUSTAIN_W) * w, g.y(g.s));
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    ctx.lineTo((g.ax + g.dx + SUSTAIN_W + t * g.rx) * w, g.y(g.s * envShape(1 - t, curve)));
+    ctx.lineTo((decayX + g.dx + SUSTAIN_W + t * g.rx) * w, g.y(g.s * envShape(1 - t, curve)));
   }
   ctx.strokeStyle = accent;
   ctx.lineWidth = Math.max(1.6, h / 52);
   ctx.stroke();
   // Fill under the curve.
-  ctx.lineTo((g.ax + g.dx + SUSTAIN_W + g.rx) * w, g.y(0));
+  ctx.lineTo((decayX + g.dx + SUSTAIN_W + g.rx) * w, g.y(0));
   ctx.lineTo(0, g.y(0));
   ctx.closePath();
   ctx.fillStyle = css("--accent-soft");
@@ -1243,14 +1845,15 @@ function drawEnv(canvas, base, level) {
 }
 
 function envHandles(g, w) {
+  const decayX = g.delx + g.ax + g.hx;
   return [
-    [g.ax * w, g.y(1)],
-    [(g.ax + g.dx) * w, g.y(g.s)],
-    [(g.ax + g.dx + SUSTAIN_W + g.rx) * w, g.y(0)],
+    [(g.delx + g.ax) * w, g.y(1)],
+    [(decayX + g.dx) * w, g.y(g.s)],
+    [(decayX + g.dx + SUSTAIN_W + g.rx) * w, g.y(0)],
   ];
 }
 
-function wireEnvCanvas(canvasId, base, levelKey) {
+function wireEnvCanvas(canvasId, base, levelKey, modSrc) {
   const canvas = $id(canvasId);
   const view = setupCanvas(canvas, () => drawEnv(canvas, base, state[levelKey]));
   redrawFns.push(view.redraw);
@@ -1280,6 +1883,9 @@ function wireEnvCanvas(canvasId, base, levelKey) {
       canvas.setPointerCapture(e.pointerId);
       lastX = e.clientX;
       lastY = e.clientY;
+    } else {
+      // Empty canvas area: drag the whole envelope out as a mod source.
+      beginModDrag(canvas, modSrc, e, { x: e.clientX, y: e.clientY });
     }
   });
   canvas.addEventListener("pointermove", (e) => {
@@ -1314,20 +1920,31 @@ function wireEnvCanvas(canvasId, base, levelKey) {
   });
 }
 
-wireEnvCanvas("viz-env1", P.ENV1, "env1");
-wireEnvCanvas("viz-env2", P.ENV2, "env2");
+wireEnvCanvas("viz-env1", P.ENV1, "env1", 6);
+wireEnvCanvas("viz-env2", P.ENV2, "env2", 1);
 
 // --- LFO views --------------------------------------------------------------------------------------
 
 function lfoShape(x, wave) {
   const t = x - Math.floor(x);
+  const rnd = (i) => {
+    const s = Math.sin(i * 127.1) * 43758.5453;
+    return (s - Math.floor(s)) * 2 - 1;
+  };
   if (wave === 0) return Math.sin(2 * Math.PI * t);
   if (wave === 1) return t < 0.5 ? 4 * t - 1 : 3 - 4 * t;
   if (wave === 2) return 2 * t - 1;
   if (wave === 3) return t < 0.5 ? 1 : -1;
-  const stepIndex = Math.floor(x * 8);
-  const r = Math.sin(stepIndex * 127.1) * 43758.5453;
-  return (r - Math.floor(r)) * 2 - 1;
+  if (wave === 5) return 1 - 2 * t;
+  if (wave === 6) return t < 0.25 ? 1 : -1;
+  if (wave === 7) {
+    // smooth S&H: cosine interpolation between hashed steps
+    const cell = Math.floor(x * 4);
+    const f = x * 4 - cell;
+    const k = 0.5 - 0.5 * Math.cos(Math.PI * f);
+    return rnd(cell) + (rnd(cell + 1) - rnd(cell)) * k;
+  }
+  return rnd(Math.floor(x * 8));
 }
 
 function drawLfo(canvas, base, liveValue) {
@@ -1366,13 +1983,17 @@ function drawLfo(canvas, base, liveValue) {
   ctx.fill();
 }
 
-for (const [canvasId, base, key] of [
-  ["viz-lfo1", P.LFO1, "lfo1"],
-  ["viz-lfo2", P.LFO2, "lfo2"],
+for (const [canvasId, base, key, modSrc] of [
+  ["viz-lfo1", P.LFO1, "lfo1", 2],
+  ["viz-lfo2", P.LFO2, "lfo2", 3],
 ]) {
   const canvas = $id(canvasId);
   const view = setupCanvas(canvas, () => drawLfo(canvas, base, state[key]));
   redrawFns.push(view.redraw);
+  // The whole LFO curve is a drag source (same as its chip).
+  canvas.addEventListener("pointerdown", (e) => {
+    beginModDrag(canvas, modSrc, e, { x: e.clientX, y: e.clientY });
+  });
 }
 
 // --- Preview keyboard ---------------------------------------------------------------------------------
@@ -1492,11 +2113,20 @@ function handleBinary(data) {
     state.stack[osc] = frames;
     invalidate();
   } else if (magic === "ZWTM") {
+    if (ab.byteLength < 37) return;
     state.voices = view.getUint8(4);
     state.env1 = view.getFloat32(5, true);
     state.env2 = view.getFloat32(9, true);
     state.lfo1 = view.getFloat32(13, true);
     state.lfo2 = view.getFloat32(17, true);
+    state.rnd1 = view.getFloat32(21, true);
+    state.rnd2 = view.getFloat32(25, true);
+    state.velo = view.getFloat32(29, true);
+    state.note = view.getFloat32(33, true);
+    for (const [i, v] of [state.rnd1, state.rnd2].entries()) {
+      state.rndHist[i].push(v);
+      if (state.rndHist[i].length > RND_HIST_LEN) state.rndHist[i].shift();
+    }
     const note = $id("voice-note");
     if (note) note.textContent = `${state.voices} voice${state.voices === 1 ? "" : "s"}`;
     invalidate();
@@ -1514,6 +2144,6 @@ sendSet = connect({
 });
 
 // Tiny read-only hook for automated UI tests.
-window.__waveSynth = { val };
+window.__waveSynth = { val, state };
 
 invalidate();

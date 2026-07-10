@@ -1,11 +1,15 @@
 //! The wavetable synth's parameter surface.
 //!
-//! Web ids 500-603 — the next free block (simple synth 100s, sampler
+//! Web ids 500-607 — the next free block (simple synth 100s, sampler
 //! 300s, granular 400s). A future native VST3/CLAP build must mirror
 //! these ids one-to-one.
 //!
 //! Layout: 500s globals, 510s OSC A, 530s OSC B, 550s filter, 560s
-//! envelopes, 570s LFOs, 580-603 the 8×3 mod matrix.
+//! envelopes, 570s LFOs, 580-603 the 8×3 mod matrix, 604-607 the
+//! global distortion, 608-611 env delay/hold, 612-615 LFO fade/one-shot,
+//! 616-618 velocity/note source shaping, 620-625 the two Random
+//! modulators (619 reserved). Ids are append-only: saved states replay
+//! every id through `set_param`, so renumbering breaks old projects.
 
 use wclap_plugin::{ParamDef, PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED};
 
@@ -30,7 +34,24 @@ pub const OSC_PHASE: u32 = 9;
 pub const OSC_RAND_PHASE: u32 = 10;
 pub const OSC_PAN: u32 = 11;
 pub const OSC_LEVEL: u32 = 12;
-pub const OSC_FIELDS: u32 = 13;
+pub const OSC_WARP_MODE: u32 = 13;
+pub const OSC_WARP_AMT: u32 = 14;
+pub const OSC_FIELDS: u32 = 15;
+
+/// Warp modes, in stepped-parameter order (Serum-style phase distortion
+/// plus cross-oscillator FM/RM/AM using the other oscillator's previous
+/// sample as the modulator).
+pub const W_OFF: u8 = 0;
+pub const W_BEND_P: u8 = 1;
+pub const W_BEND_M: u8 = 2;
+pub const W_SYNC: u8 = 3;
+pub const W_MIRROR: u8 = 4;
+pub const W_SQUEEZE: u8 = 5;
+pub const W_QUANTIZE: u8 = 6;
+pub const W_FM: u8 = 7;
+pub const W_RM: u8 = 8;
+pub const W_AM: u8 = 9;
+pub const WARP_MODE_COUNT: usize = 10;
 
 pub const P_FILTER_ENABLE: u32 = 550;
 pub const P_FILTER_TYPE: u32 = 551;
@@ -41,6 +62,32 @@ pub const P_FILTER_KEYTRACK: u32 = 555;
 pub const P_FILTER_MIX: u32 = 556;
 pub const P_FILTER_ROUTE_A: u32 = 557;
 pub const P_FILTER_ROUTE_B: u32 = 558;
+
+/// Filter types, in stepped-parameter order. 0-3 predate the growl
+/// expansion — never reorder them.
+pub const FT_LP12: u8 = 0;
+pub const FT_LP24: u8 = 1;
+pub const FT_HP12: u8 = 2;
+pub const FT_BP12: u8 = 3;
+pub const FT_NOTCH12: u8 = 4;
+pub const FT_COMB_P: u8 = 5;
+pub const FT_COMB_M: u8 = 6;
+pub const FT_FORMANT: u8 = 7;
+pub const FILTER_TYPE_COUNT: usize = 8;
+
+/// Global distortion (master bus, post-voice-sum / pre-master-gain).
+pub const P_DIST_ENABLE: u32 = 604;
+pub const P_DIST_MODE: u32 = 605;
+pub const P_DIST_DRIVE: u32 = 606;
+pub const P_DIST_MIX: u32 = 607;
+
+/// Distortion modes, in stepped-parameter order.
+pub const DIST_TANH: u8 = 0;
+pub const DIST_HARD: u8 = 1;
+pub const DIST_FOLD: u8 = 2;
+pub const DIST_SINE: u8 = 3;
+pub const DIST_CRUSH: u8 = 4;
+pub const DIST_MODE_COUNT: usize = 5;
 
 /// Envelope field offsets from the block base (ENV1=560, ENV2=565).
 pub const ENV1_BASE: u32 = 560;
@@ -60,6 +107,51 @@ pub const LFO_RATE: u32 = 1;
 pub const LFO_PHASE: u32 = 2;
 pub const LFO_RETRIG: u32 = 3;
 pub const LFO_FIELDS: u32 = 4;
+/// LFO waves, in stepped order: sine, tri, saw up, square, S&H, ramp
+/// down, pulse 25%, smooth S&H. 0-4 predate the modulation expansion.
+pub const LFO_WAVE_COUNT: usize = 8;
+
+/// Envelope Delay/Hold extension (the 560s blocks are full, so these
+/// live in the append-only 608+ range).
+pub const P_ENV1_DELAY: u32 = 608;
+pub const P_ENV1_HOLD: u32 = 609;
+pub const P_ENV2_DELAY: u32 = 610;
+pub const P_ENV2_HOLD: u32 = 611;
+
+/// LFO fade-in / one-shot extension (570s blocks are full too).
+pub const P_LFO1_FADE: u32 = 612;
+pub const P_LFO1_ONESHOT: u32 = 613;
+pub const P_LFO2_FADE: u32 = 614;
+pub const P_LFO2_ONESHOT: u32 = 615;
+
+/// Velocity / Note mod-source shaping (Serum-style source tiles).
+pub const P_VEL_CURVE: u32 = 616;
+pub const P_NOTE_CENTER: u32 = 617;
+pub const P_NOTE_RANGE: u32 = 618;
+
+/// Random modulators (Vital-style), field offsets from the block base
+/// (RND1=620, RND2=623; 619 reserved as a block separator).
+pub const RND1_BASE: u32 = 620;
+pub const RND2_BASE: u32 = 623;
+pub const RND_MODE: u32 = 0;
+pub const RND_RATE: u32 = 1;
+pub const RND_RETRIG: u32 = 2;
+pub const RND_FIELDS: u32 = 3;
+
+/// Random modes, in stepped order.
+pub const RND_SH: u8 = 0;
+pub const RND_SMOOTH: u8 = 1;
+pub const RND_DRIFT: u8 = 2;
+pub const RND_CHAOS: u8 = 3;
+pub const RND_MODE_COUNT: usize = 4;
+
+/// Macro knobs (Vital-style): plain 0-1 values that act as mod sources,
+/// so one performance knob can drive many destinations at once.
+pub const P_MACRO1: u32 = 626;
+pub const P_MACRO2: u32 = 627;
+pub const P_MACRO3: u32 = 628;
+pub const P_MACRO4: u32 = 629;
+pub const MACRO_COUNT: usize = 4;
 
 /// Mod matrix: 8 slots × (source, dest, amount) starting at 580.
 pub const MOD_BASE: u32 = 580;
@@ -69,8 +161,9 @@ pub const MOD_DEST: u32 = 1;
 pub const MOD_AMOUNT: u32 = 2;
 pub const MOD_FIELDS: u32 = 3;
 
-/// Mod sources, in stepped-parameter order. Env 1 (the amp envelope) was
-/// appended after the original set so existing presets keep their meaning.
+/// Mod sources, in stepped-parameter order. Env 1 (the amp envelope) and
+/// the two Random modulators were appended after the original set so
+/// existing presets keep their meaning.
 pub const SRC_NONE: usize = 0;
 pub const SRC_ENV2: usize = 1;
 pub const SRC_LFO1: usize = 2;
@@ -78,7 +171,13 @@ pub const SRC_LFO2: usize = 3;
 pub const SRC_VELOCITY: usize = 4;
 pub const SRC_NOTE: usize = 5;
 pub const SRC_ENV1: usize = 6;
-pub const SRC_COUNT: usize = 7;
+pub const SRC_RND1: usize = 7;
+pub const SRC_RND2: usize = 8;
+pub const SRC_MACRO1: usize = 9;
+pub const SRC_MACRO2: usize = 10;
+pub const SRC_MACRO3: usize = 11;
+pub const SRC_MACRO4: usize = 12;
+pub const SRC_COUNT: usize = 13;
 
 /// Mod destinations, in stepped-parameter order.
 pub const DST_NONE: usize = 0;
@@ -93,7 +192,13 @@ pub const DST_B_PAN: usize = 8;
 pub const DST_CUTOFF: usize = 9;
 pub const DST_RESO: usize = 10;
 pub const DST_MASTER: usize = 11;
-pub const DST_COUNT: usize = 12;
+// Appended by the growl expansion (preset compat: never renumber).
+pub const DST_A_WARP: usize = 12;
+pub const DST_B_WARP: usize = 13;
+pub const DST_DIST_DRIVE: usize = 14;
+pub const DST_A_UNI_DET: usize = 15;
+pub const DST_B_UNI_DET: usize = 16;
+pub const DST_COUNT: usize = 17;
 
 fn def(id: u32, name: &'static [u8], min: f64, max: f64, default: f64, stepped: bool) -> ParamDef {
     ParamDef {
@@ -128,6 +233,8 @@ fn osc_defs(defs: &mut Vec<ParamDef>, base: u32, enabled: f64) {
             b"A Rand Phase\0",
             b"A Pan\0",
             b"A Level\0",
+            b"A Warp Mode\0",
+            b"A Warp Amt\0",
         ]
     } else {
         &[
@@ -144,6 +251,8 @@ fn osc_defs(defs: &mut Vec<ParamDef>, base: u32, enabled: f64) {
             b"B Rand Phase\0",
             b"B Pan\0",
             b"B Level\0",
+            b"B Warp Mode\0",
+            b"B Warp Amt\0",
         ]
     };
     defs.push(def(base + OSC_ENABLE, names[0], 0.0, 1.0, enabled, true));
@@ -166,6 +275,15 @@ fn osc_defs(defs: &mut Vec<ParamDef>, base: u32, enabled: f64) {
     defs.push(def(base + OSC_RAND_PHASE, names[10], 0.0, 1.0, 1.0, false));
     defs.push(def(base + OSC_PAN, names[11], -1.0, 1.0, 0.0, false));
     defs.push(def(base + OSC_LEVEL, names[12], 0.0, 1.0, 0.75, false));
+    defs.push(def(
+        base + OSC_WARP_MODE,
+        names[13],
+        0.0,
+        (WARP_MODE_COUNT - 1) as f64,
+        0.0,
+        true,
+    ));
+    defs.push(def(base + OSC_WARP_AMT, names[14], 0.0, 1.0, 0.0, false));
 }
 
 fn env_defs(defs: &mut Vec<ParamDef>, base: u32, sustain: f64) {
@@ -209,8 +327,17 @@ fn lfo_defs(defs: &mut Vec<ParamDef>, base: u32) {
             b"LFO2 Retrig\0",
         ]
     };
-    defs.push(def(base + LFO_WAVE, names[0], 0.0, 4.0, 0.0, true));
-    defs.push(def(base + LFO_RATE, names[1], 0.01, 20.0, 2.0, false));
+    defs.push(def(
+        base + LFO_WAVE,
+        names[0],
+        0.0,
+        (LFO_WAVE_COUNT - 1) as f64,
+        0.0,
+        true,
+    ));
+    // 50 Hz ceiling: fast growl wobble territory (no host tempo sync in
+    // the WebCLAP scaffold, so raw rate is the only option).
+    defs.push(def(base + LFO_RATE, names[1], 0.01, 50.0, 2.0, false));
     defs.push(def(base + LFO_PHASE, names[2], 0.0, 1.0, 0.0, false));
     defs.push(def(base + LFO_RETRIG, names[3], 0.0, 1.0, 1.0, true));
 }
@@ -233,7 +360,14 @@ pub fn param_defs() -> Vec<ParamDef> {
         1.0,
         true,
     ));
-    defs.push(def(P_FILTER_TYPE, b"Filter Type\0", 0.0, 3.0, 0.0, true));
+    defs.push(def(
+        P_FILTER_TYPE,
+        b"Filter Type\0",
+        0.0,
+        (FILTER_TYPE_COUNT - 1) as f64,
+        0.0,
+        true,
+    ));
     defs.push(def(
         P_FILTER_CUTOFF,
         b"Cutoff\0",
@@ -285,6 +419,53 @@ pub fn param_defs() -> Vec<ParamDef> {
         ));
         defs.push(def(base + MOD_AMOUNT, names[2], -1.0, 1.0, 0.0, false));
     }
+
+    defs.push(def(P_DIST_ENABLE, b"Dist Enable\0", 0.0, 1.0, 0.0, true));
+    defs.push(def(
+        P_DIST_MODE,
+        b"Dist Mode\0",
+        0.0,
+        (DIST_MODE_COUNT - 1) as f64,
+        0.0,
+        true,
+    ));
+    defs.push(def(P_DIST_DRIVE, b"Dist Drive\0", 0.0, 1.0, 0.3, false));
+    defs.push(def(P_DIST_MIX, b"Dist Mix\0", 0.0, 1.0, 1.0, false));
+
+    defs.push(def(P_ENV1_DELAY, b"Env1 Delay\0", 0.0, 2.0, 0.0, false));
+    defs.push(def(P_ENV1_HOLD, b"Env1 Hold\0", 0.0, 2.0, 0.0, false));
+    defs.push(def(P_ENV2_DELAY, b"Env2 Delay\0", 0.0, 2.0, 0.0, false));
+    defs.push(def(P_ENV2_HOLD, b"Env2 Hold\0", 0.0, 2.0, 0.0, false));
+    defs.push(def(P_LFO1_FADE, b"LFO1 Fade\0", 0.0, 5.0, 0.0, false));
+    defs.push(def(P_LFO1_ONESHOT, b"LFO1 OneShot\0", 0.0, 1.0, 0.0, true));
+    defs.push(def(P_LFO2_FADE, b"LFO2 Fade\0", 0.0, 5.0, 0.0, false));
+    defs.push(def(P_LFO2_ONESHOT, b"LFO2 OneShot\0", 0.0, 1.0, 0.0, true));
+    defs.push(def(P_VEL_CURVE, b"Vel Curve\0", -1.0, 1.0, 0.0, false));
+    defs.push(def(P_NOTE_CENTER, b"Note Center\0", 0.0, 127.0, 60.0, true));
+    defs.push(def(P_NOTE_RANGE, b"Note Range\0", 1.0, 64.0, 32.0, true));
+
+    const RND_NAMES: [[&[u8]; 3]; 2] = [
+        [b"Rnd1 Mode\0", b"Rnd1 Rate\0", b"Rnd1 Retrig\0"],
+        [b"Rnd2 Mode\0", b"Rnd2 Rate\0", b"Rnd2 Retrig\0"],
+    ];
+    for (i, base) in [RND1_BASE, RND2_BASE].into_iter().enumerate() {
+        let names = &RND_NAMES[i];
+        defs.push(def(
+            base + RND_MODE,
+            names[0],
+            0.0,
+            (RND_MODE_COUNT - 1) as f64,
+            0.0,
+            true,
+        ));
+        defs.push(def(base + RND_RATE, names[1], 0.01, 50.0, 2.0, false));
+        defs.push(def(base + RND_RETRIG, names[2], 0.0, 1.0, 1.0, true));
+    }
+
+    defs.push(def(P_MACRO1, b"Macro 1\0", 0.0, 1.0, 0.0, false));
+    defs.push(def(P_MACRO2, b"Macro 2\0", 0.0, 1.0, 0.0, false));
+    defs.push(def(P_MACRO3, b"Macro 3\0", 0.0, 1.0, 0.0, false));
+    defs.push(def(P_MACRO4, b"Macro 4\0", 0.0, 1.0, 0.0, false));
     defs
 }
 
@@ -295,10 +476,13 @@ mod tests {
     #[test]
     fn id_blocks_are_well_formed() {
         let defs = param_defs();
-        assert_eq!(defs.len(), 4 + 13 * 2 + 9 + 5 * 2 + 4 * 2 + 24);
+        assert_eq!(
+            defs.len(),
+            4 + 15 * 2 + 9 + 5 * 2 + 4 * 2 + 24 + 4 + 4 + 4 + 3 + 3 * 2 + 4
+        );
         let mut seen = std::collections::HashSet::new();
         for def in &defs {
-            assert!((500..=603).contains(&def.id), "id {} out of block", def.id);
+            assert!((500..=629).contains(&def.id), "id {} out of block", def.id);
             assert!(seen.insert(def.id), "duplicate id {}", def.id);
             assert!(def.min < def.max);
             assert!(def.default >= def.min && def.default <= def.max);
