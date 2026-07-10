@@ -335,7 +335,11 @@ function makeKnob(def) {
   const label = document.createElement("span");
   label.className = "knob-label";
   label.textContent = def.label;
-  root.append(canvas, label);
+  // Fixed-height badge strip on every knob (moddable or not) keeps the
+  // knob grids aligned; badges only ever appear on `def.dest` knobs.
+  const badges = document.createElement("div");
+  badges.className = "mod-badges";
+  root.append(canvas, label, badges);
 
   let value = def.default;
   const format = def.fmt || fmt.plain;
@@ -530,11 +534,26 @@ function makeKnob(def) {
   });
 
   requestAnimationFrame(draw);
-  // Live mod-ring animation rides the shared invalidate() pass (driven by
-  // the ~30 Hz meter packets) but only when this knob is modulated.
+  // Live mod-ring animation + badge sync ride the shared invalidate()
+  // pass (driven by the ~30 Hz meter packets). The `hadMods` latch also
+  // repaints once after the last assignment is cleared, so no stale ring
+  // survives a matrix-select removal.
   if (def.dest) {
+    let badgeSig = "";
+    const refreshBadges = (mods) => {
+      // Amount is deliberately not part of the signature: depth drags
+      // must never rebuild the badge that is being dragged.
+      const sig = mods.map((m) => `${m.base}:${m.src}`).join("|");
+      if (sig === badgeSig) return;
+      badgeSig = sig;
+      badges.replaceChildren(...mods.map((m) => makeModBadge(m.base, m.src, def)));
+    };
+    let hadMods = false;
     redrawFns.push(() => {
-      if (modsForDest(def.dest).length) draw();
+      const mods = modsForDest(def.dest);
+      refreshBadges(mods);
+      if (mods.length || hadMods) draw();
+      hadMods = mods.length > 0;
     });
   }
   register(def, {
@@ -925,6 +944,7 @@ function buildMatrix() {
     const base = P.MOD_BASE + slot * P.MOD_FIELDS;
     const row = document.createElement("div");
     row.className = "matrix-row";
+    row.dataset.base = String(base);
 
     const index = document.createElement("span");
     index.className = "slot-index";
@@ -955,24 +975,30 @@ function buildMatrix() {
         Number(source.value) > 0 && Number(dest.value) > 0 && Number(amount.value) !== 0,
       );
 
+    // invalidate() keeps the knob rings/badges in lockstep with matrix
+    // edits (they are all views of the same slot params).
     source.addEventListener("change", () => {
       sendSet(base + 0, Number(source.value));
       engage();
+      invalidate();
     });
     dest.addEventListener("change", () => {
       sendSet(base + 1, Number(dest.value));
       engage();
+      invalidate();
     });
     amount.addEventListener("input", () => {
       readout.textContent = `${amount.value} %`;
       sendSet(base + 2, Number(amount.value) / 100);
       engage();
+      invalidate();
     });
     amount.addEventListener("dblclick", () => {
       amount.value = 0;
       readout.textContent = "0 %";
       sendSet(base + 2, 0);
       engage();
+      invalidate();
     });
 
     row.append(index, source, dest, amountWrap, readout);
@@ -1022,12 +1048,64 @@ buildMatrix();
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-function beginModDrag(chip, src, event) {
-  event.preventDefault();
-  chip.setPointerCapture(event.pointerId);
-  document.body.classList.add("mod-drag");
+/** Every assignable element on screen, with its snap geometry. Knob roots
+ * delegate to their canvas so labels/badges don't skew the snap point. */
+function collectDropTargets() {
+  const targets = [];
+  for (const el of document.querySelectorAll("[data-dest]")) {
+    const box = el.classList.contains("knob") ? el.querySelector("canvas") || el : el;
+    const rect = box.getBoundingClientRect();
+    targets.push({
+      el,
+      dest: Number(el.dataset.dest),
+      cx: rect.left + rect.width / 2,
+      cy: rect.top + rect.height / 2,
+      rect,
+    });
+  }
+  return targets;
+}
 
+/** Snap resolution: a target whose rect contains the pointer wins
+ * (smallest area first, so knobs beat the big canvases they overlap),
+ * otherwise the nearest center within `radius` px. */
+function nearestTarget(targets, x, y, radius = 52) {
+  let inside = null;
+  for (const t of targets) {
+    const { rect } = t;
+    if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+      if (!inside || rect.width * rect.height < inside.rect.width * inside.rect.height) {
+        inside = t;
+      }
+    }
+  }
+  if (inside) return inside;
+  let best = null;
+  let bestDist = radius;
+  for (const t of targets) {
+    const dist = Math.hypot(x - t.cx, y - t.cy);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = t;
+    }
+  }
+  return best;
+}
+
+/**
+ * Starts a mod-assignment drag from `anchor` (a chip or an env/lfo canvas).
+ * While dragging, every [data-dest] element pulses, the line snaps to the
+ * nearest target, and dropping calls assignMod. `origin` overrides the
+ * line's start point (canvas sources start at the pointer).
+ */
+function beginModDrag(anchor, src, event, origin = null) {
+  event.preventDefault();
+  setSourceHighlight(src, false);
+  anchor.setPointerCapture(event.pointerId);
   const color = MOD_COLORS[src] || css("--accent");
+  document.body.classList.add("mod-drag");
+  document.body.style.setProperty("--drag-color", color);
+
   const overlay = document.createElementNS(SVG_NS, "svg");
   overlay.setAttribute("class", "mod-drag-overlay");
   const line = document.createElementNS(SVG_NS, "line");
@@ -1040,64 +1118,164 @@ function beginModDrag(chip, src, event) {
   overlay.append(line, dot);
   document.body.append(overlay);
 
-  const rect = chip.getBoundingClientRect();
-  const x0 = rect.left + rect.width / 2;
-  const y0 = rect.top + rect.height / 2;
-  line.setAttribute("x1", String(x0));
-  line.setAttribute("y1", String(y0));
+  const start = origin || (() => {
+    const rect = anchor.getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })();
+  line.setAttribute("x1", String(start.x));
+  line.setAttribute("y1", String(start.y));
 
-  let hover = null;
-  const targetAt = (e) => {
-    const el = document.elementFromPoint(e.clientX, e.clientY);
-    return el && el.closest ? el.closest("[data-dest]") : null;
+  let targets = collectDropTargets();
+  let snapped = null;
+  // Wheel-scrolling mid-drag would stale the cached rects.
+  const recollect = () => {
+    targets = collectDropTargets();
+  };
+  document.addEventListener("scroll", recollect, true);
+
+  const setSnap = (target) => {
+    if (target === snapped) return;
+    if (snapped) snapped.el.classList.remove("mod-drop-snap");
+    snapped = target;
+    if (snapped) snapped.el.classList.add("mod-drop-snap");
   };
   const track = (e) => {
-    line.setAttribute("x2", String(e.clientX));
-    line.setAttribute("y2", String(e.clientY));
-    dot.setAttribute("cx", String(e.clientX));
-    dot.setAttribute("cy", String(e.clientY));
-    const target = targetAt(e);
-    if (target !== hover) {
-      if (hover) hover.classList.remove("mod-drop-hover");
-      hover = target;
-      if (hover) hover.classList.add("mod-drop-hover");
+    const target = nearestTarget(targets, e.clientX, e.clientY);
+    setSnap(target);
+    const ex = target ? target.cx : e.clientX;
+    const ey = target ? target.cy : e.clientY;
+    line.setAttribute("x2", String(ex));
+    line.setAttribute("y2", String(ey));
+    dot.setAttribute("cx", String(ex));
+    dot.setAttribute("cy", String(ey));
+    if (target) {
+      showTip(target.cx + 12, target.cy, `${MOD_SOURCES[src]} → ${MOD_DESTS[target.dest]}`);
+    } else {
+      hideTip();
     }
   };
   track(event);
 
   const finish = (e) => {
-    if (chip.hasPointerCapture?.(e.pointerId)) chip.releasePointerCapture(e.pointerId);
+    if (anchor.hasPointerCapture?.(e.pointerId)) anchor.releasePointerCapture(e.pointerId);
     overlay.remove();
     document.body.classList.remove("mod-drag");
-    if (hover) hover.classList.remove("mod-drop-hover");
-    chip.removeEventListener("pointermove", track);
-    chip.removeEventListener("pointerup", drop);
-    chip.removeEventListener("pointercancel", finish);
+    document.body.style.removeProperty("--drag-color");
+    document.removeEventListener("scroll", recollect, true);
+    setSnap(null);
+    anchor.removeEventListener("pointermove", track);
+    anchor.removeEventListener("pointerup", drop);
+    anchor.removeEventListener("pointercancel", finish);
   };
   const drop = (e) => {
-    const target = targetAt(e);
+    const target = snapped;
     finish(e);
-    if (!target) return;
-    const dest = Number(target.dataset.dest);
-    const base = assignMod(src, dest);
+    if (!target) {
+      hideTip();
+      return;
+    }
+    const base = assignMod(src, target.dest);
     showTip(
-      e.clientX,
-      e.clientY,
+      target.cx + 12,
+      target.cy,
       base < 0
         ? "Mod matrix full (8 slots)"
-        : `${MOD_SOURCES[src]} → ${MOD_DESTS[dest]}: ${Math.round(val(base + 2) * 100)} %`,
+        : `${MOD_SOURCES[src]} → ${MOD_DESTS[target.dest]}: ${Math.round(val(base + 2) * 100)} %`,
     );
     setTimeout(hideTip, 1400);
   };
-  chip.addEventListener("pointermove", track);
-  chip.addEventListener("pointerup", drop);
-  chip.addEventListener("pointercancel", finish);
+  anchor.addEventListener("pointermove", track);
+  anchor.addEventListener("pointerup", drop);
+  anchor.addEventListener("pointercancel", finish);
+}
+
+/** One colored dot per assignment under a modulated knob: hover shows
+ * the connection, vertical drag edits the depth, double-click removes. */
+function makeModBadge(base, src, def) {
+  const badge = document.createElement("span");
+  badge.className = "mod-badge";
+  badge.style.setProperty("--badge-color", MOD_COLORS[src] || css("--accent"));
+  const tip = (e) =>
+    showTip(
+      e.clientX,
+      e.clientY,
+      `${MOD_SOURCES[src]} → ${def.label}: ${Math.round(val(base + 2) * 100)} %`,
+    );
+
+  let dragging = false;
+  let dragY = 0;
+  let amount = 0;
+  badge.addEventListener("pointerenter", (e) => {
+    tip(e);
+    chipFor(src)?.classList.add("mod-chip-hot");
+    matrixRowFor(base)?.classList.add("mod-hot");
+  });
+  badge.addEventListener("pointerleave", () => {
+    if (!dragging) hideTip();
+    chipFor(src)?.classList.remove("mod-chip-hot");
+    matrixRowFor(base)?.classList.remove("mod-hot");
+  });
+  badge.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    badge.setPointerCapture(e.pointerId);
+    dragging = true;
+    dragY = e.clientY;
+    amount = val(base + 2);
+    tip(e);
+  });
+  badge.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const range = e.shiftKey ? 1600 : 160;
+    amount = clamp(amount + (dragY - e.clientY) / range, -1, 1);
+    dragY = e.clientY;
+    setParam(base + 2, amount);
+    tip(e);
+  });
+  const endDrag = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    if (badge.hasPointerCapture?.(e.pointerId)) badge.releasePointerCapture(e.pointerId);
+    hideTip();
+  };
+  badge.addEventListener("pointerup", endDrag);
+  badge.addEventListener("pointercancel", endDrag);
+  badge.addEventListener("dblclick", (e) => {
+    e.stopPropagation();
+    clearMod(base);
+    hideTip();
+  });
+  return badge;
+}
+
+// --- Hover cross-highlighting ------------------------------------------------
+
+function chipFor(src) {
+  return document.querySelector(`.mod-chip[data-src="${src}"]`);
+}
+
+function matrixRowFor(base) {
+  return document.querySelector(`.matrix-row[data-base="${base}"]`);
+}
+
+/** Glow every knob/canvas currently modulated by `src` (chip hover). */
+function setSourceHighlight(src, on) {
+  if (on && document.body.classList.contains("mod-drag")) return;
+  const color = MOD_COLORS[src] || css("--accent");
+  for (const el of document.querySelectorAll("[data-dest]")) {
+    const hit = on && modsForDest(Number(el.dataset.dest)).some((m) => m.src === src);
+    el.classList.toggle("mod-hot", hit);
+    if (hit) el.style.setProperty("--mod-hot-color", color);
+    else el.style.removeProperty("--mod-hot-color");
+  }
 }
 
 for (const chip of document.querySelectorAll(".mod-chip")) {
   const src = Number(chip.dataset.src);
   chip.style.setProperty("--chip-color", MOD_COLORS[src] || "#7e93a3");
   chip.addEventListener("pointerdown", (e) => beginModDrag(chip, src, e));
+  chip.addEventListener("pointerenter", () => setSourceHighlight(src, true));
+  chip.addEventListener("pointerleave", () => setSourceHighlight(src, false));
 }
 
 // --- Live packet state --------------------------------------------------------------------
@@ -1452,7 +1630,7 @@ function envHandles(g, w) {
   ];
 }
 
-function wireEnvCanvas(canvasId, base, levelKey) {
+function wireEnvCanvas(canvasId, base, levelKey, modSrc) {
   const canvas = $id(canvasId);
   const view = setupCanvas(canvas, () => drawEnv(canvas, base, state[levelKey]));
   redrawFns.push(view.redraw);
@@ -1482,6 +1660,9 @@ function wireEnvCanvas(canvasId, base, levelKey) {
       canvas.setPointerCapture(e.pointerId);
       lastX = e.clientX;
       lastY = e.clientY;
+    } else {
+      // Empty canvas area: drag the whole envelope out as a mod source.
+      beginModDrag(canvas, modSrc, e, { x: e.clientX, y: e.clientY });
     }
   });
   canvas.addEventListener("pointermove", (e) => {
@@ -1516,8 +1697,8 @@ function wireEnvCanvas(canvasId, base, levelKey) {
   });
 }
 
-wireEnvCanvas("viz-env1", P.ENV1, "env1");
-wireEnvCanvas("viz-env2", P.ENV2, "env2");
+wireEnvCanvas("viz-env1", P.ENV1, "env1", 6);
+wireEnvCanvas("viz-env2", P.ENV2, "env2", 1);
 
 // --- LFO views --------------------------------------------------------------------------------------
 
@@ -1568,13 +1749,17 @@ function drawLfo(canvas, base, liveValue) {
   ctx.fill();
 }
 
-for (const [canvasId, base, key] of [
-  ["viz-lfo1", P.LFO1, "lfo1"],
-  ["viz-lfo2", P.LFO2, "lfo2"],
+for (const [canvasId, base, key, modSrc] of [
+  ["viz-lfo1", P.LFO1, "lfo1", 2],
+  ["viz-lfo2", P.LFO2, "lfo2", 3],
 ]) {
   const canvas = $id(canvasId);
   const view = setupCanvas(canvas, () => drawLfo(canvas, base, state[key]));
   redrawFns.push(view.redraw);
+  // The whole LFO curve is a drag source (same as its chip).
+  canvas.addEventListener("pointerdown", (e) => {
+    beginModDrag(canvas, modSrc, e, { x: e.clientX, y: e.clientY });
+  });
 }
 
 // --- Preview keyboard ---------------------------------------------------------------------------------
