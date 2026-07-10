@@ -2,11 +2,13 @@
 //! instrument.
 //!
 //! Two morphing wavetable oscillators (factory tables with band-limited
-//! mip levels, up to 8-voice unison each), a per-voice TPT state-variable
-//! filter, two ADSR envelopes (Env1 hard-wired to amp), two LFOs, and an
-//! 8-slot modulation matrix — every slot field is an automatable host
-//! parameter. See [`engine::SynthEngine`] for the DSP and [`params`] for
-//! the id surface (web ids 500-603).
+//! mip levels, up to 8-voice unison each, Serum-style warp modes incl.
+//! cross-osc FM/RM/AM), a per-voice TPT state-variable filter (LP/HP/BP/
+//! notch/comb/formant), a global distortion stage, two ADSR envelopes
+//! (Env1 hard-wired to amp), two LFOs, and an 8-slot modulation matrix —
+//! every slot field is an automatable host parameter. See
+//! [`engine::SynthEngine`] for the DSP and [`params`] for the id surface
+//! (web ids 500-607).
 //!
 //! The [`engine`], [`params`] and [`protocol`] modules are `pub` because
 //! this crate is also meant to serve as the engine library for a future
@@ -39,7 +41,7 @@ static PLUGIN_DEF: PluginDef = PluginDef {
     vendor: b"zukky\0",
     url: b"https://github.com/SuzukiDaishi/z-audio-dsp\0",
     version: b"0.1.0\0",
-    description: b"Serum-inspired wavetable synth: 2 morphing oscillators with unison, SVF filter, 2 envelopes, 2 LFOs, mod matrix\0",
+    description: b"Serum-inspired wavetable synth: 2 morphing oscillators with unison + warp (FM/sync/bend), formant/comb filters, distortion, 2 envelopes, 2 LFOs, mod matrix\0",
     features: &[b"instrument\0", b"synthesizer\0", b"stereo\0"],
     audio_inputs: 0,
     audio_outputs: 1,
@@ -89,6 +91,10 @@ pub fn param_value(p: &SynthParams, id: u32) -> f64 {
         P_FILTER_MIX => p.filter_mix,
         P_FILTER_ROUTE_A => p.route_a as u8 as f32,
         P_FILTER_ROUTE_B => p.route_b as u8 as f32,
+        P_DIST_ENABLE => p.dist_enable as u8 as f32,
+        P_DIST_MODE => p.dist_mode as f32,
+        P_DIST_DRIVE => p.dist_drive,
+        P_DIST_MIX => p.dist_mix,
         id if (OSC_A_BASE..OSC_A_BASE + OSC_FIELDS).contains(&id)
             || (OSC_B_BASE..OSC_B_BASE + OSC_FIELDS).contains(&id) =>
         {
@@ -111,7 +117,9 @@ pub fn param_value(p: &SynthParams, id: u32) -> f64 {
                 OSC_PHASE => o.phase,
                 OSC_RAND_PHASE => o.rand_phase,
                 OSC_PAN => o.pan,
-                _ => o.level,
+                OSC_LEVEL => o.level,
+                OSC_WARP_MODE => o.warp_mode as f32,
+                _ => o.warp_amount,
             }
         }
         id if (ENV1_BASE..ENV1_BASE + ENV_FIELDS).contains(&id)
@@ -170,7 +178,9 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
         P_BEND_RANGE => p.bend_range = v.clamp(0.0, 24.0).round(),
         P_GLIDE => p.glide_s = v.clamp(0.0, 2.0),
         P_FILTER_ENABLE => p.filter_enable = v >= 0.5,
-        P_FILTER_TYPE => p.filter_type = v.clamp(0.0, 3.0).round() as u8,
+        P_FILTER_TYPE => {
+            p.filter_type = v.clamp(0.0, (FILTER_TYPE_COUNT - 1) as f32).round() as u8
+        }
         P_FILTER_CUTOFF => p.cutoff_hz = v.clamp(20.0, 20_000.0),
         P_FILTER_RESO => p.resonance = v.clamp(0.0, 1.0),
         P_FILTER_DRIVE => p.drive = v.clamp(0.0, 1.0),
@@ -178,6 +188,10 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
         P_FILTER_MIX => p.filter_mix = v.clamp(0.0, 1.0),
         P_FILTER_ROUTE_A => p.route_a = v >= 0.5,
         P_FILTER_ROUTE_B => p.route_b = v >= 0.5,
+        P_DIST_ENABLE => p.dist_enable = v >= 0.5,
+        P_DIST_MODE => p.dist_mode = v.clamp(0.0, (DIST_MODE_COUNT - 1) as f32).round() as u8,
+        P_DIST_DRIVE => p.dist_drive = v.clamp(0.0, 1.0),
+        P_DIST_MIX => p.dist_mix = v.clamp(0.0, 1.0),
         id if (OSC_A_BASE..OSC_A_BASE + OSC_FIELDS).contains(&id)
             || (OSC_B_BASE..OSC_B_BASE + OSC_FIELDS).contains(&id) =>
         {
@@ -206,7 +220,11 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
                 OSC_PHASE => o.phase = v.clamp(0.0, 1.0),
                 OSC_RAND_PHASE => o.rand_phase = v.clamp(0.0, 1.0),
                 OSC_PAN => o.pan = v.clamp(-1.0, 1.0),
-                _ => o.level = v.clamp(0.0, 1.0),
+                OSC_LEVEL => o.level = v.clamp(0.0, 1.0),
+                OSC_WARP_MODE => {
+                    o.warp_mode = v.clamp(0.0, (WARP_MODE_COUNT - 1) as f32).round() as u8
+                }
+                _ => o.warp_amount = v.clamp(0.0, 1.0),
             }
         }
         id if (ENV1_BASE..ENV1_BASE + ENV_FIELDS).contains(&id)
@@ -245,7 +263,7 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
             };
             match id - base {
                 LFO_WAVE => l.wave = v.clamp(0.0, 4.0).round() as u8,
-                LFO_RATE => l.rate_hz = v.clamp(0.01, 20.0),
+                LFO_RATE => l.rate_hz = v.clamp(0.01, 50.0),
                 LFO_PHASE => l.phase = v.clamp(0.0, 1.0),
                 _ => l.retrig = v >= 0.5,
             }
@@ -271,20 +289,25 @@ struct ZAudioWebWavetable {
     ui_seen: bool,
     /// Output samples until the next meter push (~30 Hz).
     meter_countdown: usize,
-    /// Waveform previews resend when these change (table, wt_pos ×2).
-    last_preview_key: (u8, u32, u8, u32),
+    /// Waveform previews resend when these change (table, wt_pos, warp
+    /// mode/amount ×2 oscillators).
+    last_preview_key: (u8, u32, u8, u32, u8, u32, u8, u32),
     /// Stack packets resend when a table selection changes.
     last_stack_key: (u8, u8),
     sample_rate: f32,
 }
 
 impl ZAudioWebWavetable {
-    fn preview_key(p: &SynthParams) -> (u8, u32, u8, u32) {
+    fn preview_key(p: &SynthParams) -> (u8, u32, u8, u32, u8, u32, u8, u32) {
         (
             p.osc_a.table,
             p.osc_a.wt_pos.to_bits(),
             p.osc_b.table,
             p.osc_b.wt_pos.to_bits(),
+            p.osc_a.warp_mode,
+            p.osc_a.warp_amount.to_bits(),
+            p.osc_b.warp_mode,
+            p.osc_b.warp_amount.to_bits(),
         )
     }
 
@@ -329,7 +352,7 @@ impl Plugin for ZAudioWebWavetable {
             right: vec![0.0; 128],
             ui_seen: false,
             meter_countdown: 0,
-            last_preview_key: (255, 0, 255, 0),
+            last_preview_key: (255, 0, 255, 0, 255, 0, 255, 0),
             last_stack_key: (255, 255),
             sample_rate: 48_000.0,
         }
@@ -541,6 +564,65 @@ mod tests {
                 got
             );
         }
+    }
+
+    #[test]
+    fn pre_expansion_state_loads_with_new_features_inert() {
+        // A project saved before the growl expansion only carries ids
+        // 500-603 (and no warp fields inside the osc blocks). Replaying
+        // such a state must leave every new feature at its inert default.
+        let mut p = SynthParams::default();
+        for def in param_defs() {
+            let is_new = matches!(def.id, 523 | 524 | 543 | 544 | 604..=607);
+            if def.id <= 603 && !is_new {
+                apply_param(&mut p, def.id, (def.min + def.max) * 0.5);
+            }
+        }
+        assert_eq!(p.osc_a.warp_mode, 0);
+        assert_eq!(p.osc_a.warp_amount, 0.0);
+        assert_eq!(p.osc_b.warp_mode, 0);
+        assert_eq!(p.osc_b.warp_amount, 0.0);
+        assert!(!p.dist_enable);
+    }
+
+    /// The "Vowel Growl" factory preset as shipped in ui/main.js — this
+    /// mirror guards the JS id numbers against drift in the Rust surface.
+    const VOWEL_GROWL: &[(u32, f64)] = &[
+        (511, 5.0),  // A Table = Growl
+        (512, 0.3),  // A WT Pos
+        (513, -1.0), // A Octave
+        (516, 5.0),  // A Unison
+        (517, 0.18), // A Uni Detune
+        (551, 7.0),  // Filter Type = Formant
+        (552, 900.0),
+        (553, 0.5),
+        (571, 4.5), // LFO1 Rate
+        (580, 2.0),
+        (581, 9.0),
+        (582, 0.6), // LFO1 → Cutoff
+        (583, 2.0),
+        (584, 1.0),
+        (585, 0.35), // LFO1 → A WT Pos
+        (604, 1.0),
+        (605, 0.0),
+        (606, 0.45),
+        (607, 0.8),
+    ];
+
+    #[test]
+    fn preset_snapshot_applies_and_round_trips() {
+        let mut p = SynthParams::default();
+        for &(id, v) in VOWEL_GROWL {
+            apply_param(&mut p, id, v);
+            assert!(
+                (param_value(&p, id) - v).abs() < 1.0e-4,
+                "preset id {id} value {v} did not round-trip"
+            );
+        }
+        assert_eq!(p.osc_a.table, 5);
+        assert_eq!(p.filter_type, 7);
+        assert!(p.dist_enable);
+        assert_eq!(p.mods[0].dest as usize, DST_CUTOFF);
     }
 
     #[test]

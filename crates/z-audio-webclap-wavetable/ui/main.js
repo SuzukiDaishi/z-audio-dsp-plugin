@@ -37,6 +37,8 @@ const P = {
   RAND_PHASE: 10,
   PAN: 11,
   LEVEL: 12,
+  WARP_MODE: 13,
+  WARP_AMT: 14,
   FILTER_ENABLE: 550,
   FILTER_TYPE: 551,
   CUTOFF: 552,
@@ -62,9 +64,36 @@ const P = {
   MOD_BASE: 580,
   MOD_FIELDS: 3,
   MOD_SLOTS: 8,
+  DIST_ENABLE: 604,
+  DIST_MODE: 605,
+  DIST_DRIVE: 606,
+  DIST_MIX: 607,
 };
 
-const TABLE_NAMES = ["Basic Shapes", "PWM", "Harmonic Sweep", "Metal Bell"];
+const TABLE_NAMES = [
+  "Basic Shapes",
+  "PWM",
+  "Harmonic Sweep",
+  "Metal Bell",
+  "Vowel Morph",
+  "Growl",
+  "FM Growl",
+  "Sync Saw",
+  "Digital Grit",
+];
+const WARP_MODES = [
+  "Warp Off",
+  "Bend +",
+  "Bend −",
+  "Sync",
+  "Mirror",
+  "Squeeze",
+  "Quantize",
+  "FM (other)",
+  "RM (other)",
+  "AM (other)",
+];
+const DIST_MODES = ["Tanh", "Hard", "Fold", "Sine", "Crush"];
 const MOD_SOURCES = ["None", "Env 2", "LFO 1", "LFO 2", "Velocity", "Note", "Env 1"];
 const MOD_COLORS = [
   "#7e93a3", // none (unused)
@@ -88,6 +117,11 @@ const MOD_DESTS = [
   "Cutoff",
   "Reso",
   "Master",
+  "A Warp",
+  "B Warp",
+  "Dist Drive",
+  "A Detune",
+  "B Detune",
 ];
 
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -575,6 +609,32 @@ function makeSegmented(def) {
   return root;
 }
 
+/** Registered <select> — used for the per-osc warp mode picker. */
+function makeSelect(def) {
+  const select = document.createElement("select");
+  for (const [i, name] of def.options.entries()) select.add(new Option(name, i));
+  let value = def.default;
+  const render = () => {
+    select.value = String(Math.round(value));
+    select.classList.toggle("engaged", Math.round(value) > 0);
+  };
+  select.addEventListener("change", () => {
+    value = Number(select.value);
+    render();
+    sendSet(def.id, value);
+    invalidate();
+  });
+  render();
+  register(def, {
+    get: () => value,
+    set: (v) => {
+      value = v;
+      render();
+    },
+  });
+  return select;
+}
+
 function makeTablePicker(def) {
   const root = document.createElement("div");
   root.className = "table-picker";
@@ -636,12 +696,22 @@ function buildOsc(base, prefix) {
       return picker;
     })(),
   );
-  const knobs = $id(`${prefix}-knobs`);
   const isA = base === P.OSC_A;
+  $id(`${prefix}-warp`).append(
+    makeSelect({
+      id: at(P.WARP_MODE),
+      options: WARP_MODES,
+      min: 0,
+      max: WARP_MODES.length - 1,
+      default: 0,
+    }),
+  );
+  const knobs = $id(`${prefix}-knobs`);
   const defs = [
     { id: at(P.WT_POS), label: "WT Pos", min: 0, max: 1, default: 0, fmt: fmt.pct, dest: isA ? 1 : 5 },
+    { id: at(P.WARP_AMT), label: "Warp", min: 0, max: 1, default: 0, fmt: fmt.pct, dest: isA ? 12 : 13 },
     { id: at(P.UNISON), label: "Unison", min: 1, max: 8, default: 1, step: 1, fmt: fmt.int },
-    { id: at(P.UNI_DETUNE), label: "Detune", min: 0, max: 1, default: 0.25, fmt: fmt.pct },
+    { id: at(P.UNI_DETUNE), label: "Detune", min: 0, max: 1, default: 0.25, fmt: fmt.pct, dest: isA ? 15 : 16 },
     { id: at(P.UNI_BLEND), label: "Blend", min: 0, max: 1, default: 0.75, fmt: fmt.pct },
     { id: at(P.PHASE), label: "Phase", min: 0, max: 1, default: 0, fmt: fmt.pct },
     { id: at(P.RAND_PHASE), label: "Rand", min: 0, max: 1, default: 1, fmt: fmt.pct },
@@ -665,9 +735,9 @@ $id("filter-enable").append(
 $id("filter-type").append(
   makeSegmented({
     id: P.FILTER_TYPE,
-    options: ["LP12", "LP24", "HP12", "BP12"],
+    options: ["LP12", "LP24", "HP12", "BP12", "NT12", "CB+", "CB−", "FMT"],
     min: 0,
-    max: 3,
+    max: 7,
     default: 0,
   }),
 );
@@ -720,7 +790,7 @@ function buildLfo(base, prefix) {
       id: at(P.RATE),
       label: "Rate",
       min: 0.01,
-      max: 20,
+      max: 50,
       default: 2,
       scale: "log",
       fmt: fmt.hzLfo,
@@ -744,12 +814,107 @@ buildLfo(P.LFO2, "lfo2");
 $id("master-mount").append(
   makeKnob({ id: P.MASTER, label: "Master", min: 0, max: 1, default: 0.8, fmt: fmt.pct, dest: 11 }),
 );
+
+// --- Distortion (global, post-voice-sum) --------------------------------------
+
+$id("dist-enable").append(
+  makeSwitch({ id: P.DIST_ENABLE, label: "On", min: 0, max: 1, default: 0 }),
+);
+$id("dist-mode").append(
+  makeSegmented({
+    id: P.DIST_MODE,
+    options: DIST_MODES,
+    min: 0,
+    max: DIST_MODES.length - 1,
+    default: 0,
+  }),
+);
+$id("dist-knobs").append(
+  makeKnob({ id: P.DIST_DRIVE, label: "Drive", min: 0, max: 1, default: 0.3, fmt: fmt.pct, dest: 14 }),
+  makeKnob({ id: P.DIST_MIX, label: "Mix", min: 0, max: 1, default: 1, fmt: fmt.pct }),
+);
 for (const def of [
   { id: P.POLYPHONY, label: "Voices", min: 1, max: 16, default: 8, step: 1, fmt: fmt.int },
   { id: P.BEND_RANGE, label: "Bend", min: 0, max: 24, default: 2, step: 1, fmt: fmtSt },
   { id: P.GLIDE, label: "Glide", min: 0, max: 2, default: 0, scale: "pow2", fmt: fmt.s },
 ]) {
   $id("global-knobs").append(makeKnob(def));
+}
+
+// --- Factory presets ------------------------------------------------------------
+//
+// Each preset is a diff against Init (every registered param back at its
+// default), so the maps stay valid as the parameter surface grows. The
+// "Vowel Growl" map is mirrored in src/lib.rs tests to guard id drift.
+
+const PRESETS = [
+  { name: "Init", set: {} },
+  {
+    // Growl table through the formant filter, LFO1 sweeping the vowel.
+    name: "Vowel Growl",
+    set: {
+      511: 5, 512: 0.3, 513: -1, 516: 5, 517: 0.18,
+      551: 7, 552: 900, 553: 0.5,
+      571: 4.5,
+      580: 2, 581: 9, 582: 0.6,
+      583: 2, 584: 1, 585: 0.35,
+      604: 1, 605: 0, 606: 0.45, 607: 0.8,
+    },
+  },
+  {
+    // FM Growl table, osc B as a silent FM modulator two octaves down,
+    // Env2 kicks the FM depth per note, LFO2 talks through the formants.
+    name: "FM Talk Bass",
+    set: {
+      511: 6, 512: 0.4, 513: -1, 523: 7, 524: 0.5,
+      530: 1, 533: -2, 542: 0,
+      551: 7, 552: 600, 553: 0.4,
+      566: 0.35, 567: 0.2,
+      575: 6,
+      580: 3, 581: 9, 582: 0.5,
+      583: 1, 584: 12, 585: 0.6,
+      586: 3, 587: 1, 588: 0.3,
+      604: 1, 605: 0, 606: 0.35, 607: 1,
+    },
+  },
+  {
+    // Detuned sync-saw stack over a growl layer, dark LP24, fold dist.
+    name: "Reese Sync",
+    set: {
+      511: 7, 512: 0.25, 513: -1, 516: 7, 517: 0.35, 518: 0.9,
+      523: 3, 524: 0.3,
+      530: 1, 531: 5, 532: 0.2, 533: -1, 535: 12, 542: 0.55,
+      551: 1, 552: 400, 553: 0.25,
+      571: 0.8,
+      580: 2, 581: 9, 582: 0.4,
+      604: 1, 605: 2, 606: 0.5, 607: 0.7,
+    },
+  },
+  {
+    // Digital Grit through a key-tracked comb, morph wobble, hard clip.
+    name: "Grit Comb",
+    set: {
+      511: 8, 512: 0.5, 513: -1,
+      551: 5, 552: 110, 553: 0.6, 555: 1,
+      571: 3,
+      580: 2, 581: 1, 582: 0.5,
+      604: 1, 605: 1, 606: 0.4, 607: 0.85,
+    },
+  },
+];
+
+function applyPreset(index) {
+  const preset = PRESETS[index];
+  if (!preset) return;
+  for (const [id, c] of registry) setParam(id, c.def.default);
+  for (const [id, v] of Object.entries(preset.set)) setParam(Number(id), v);
+}
+
+{
+  const select = document.createElement("select");
+  for (const [i, p] of PRESETS.entries()) select.add(new Option(p.name, i));
+  select.addEventListener("change", () => applyPreset(Number(select.value)));
+  $id("preset-mount").append(select);
 }
 
 // --- Mod matrix -----------------------------------------------------------------------
@@ -1066,15 +1231,52 @@ wireOscCanvas("viz-osc-b", P.OSC_B);
 const FREQ_LO = Math.log(20);
 const FREQ_HI = Math.log(20000);
 
+// Mirrors src/wavetable.rs VOWEL_FORMANTS / vowel_at for the formant curve.
+const VOWEL_FORMANTS = [
+  [730, 1090, 2440],
+  [530, 1840, 2480],
+  [270, 2290, 3010],
+  [570, 840, 2410],
+  [300, 870, 2240],
+];
+const VOWEL_AMPS = [1.0, 0.63, 0.32];
+
+function vowelFreqsAt(pos) {
+  const x = clamp(pos, 0, 1) * (VOWEL_FORMANTS.length - 1);
+  const i0 = Math.min(Math.floor(x), VOWEL_FORMANTS.length - 2);
+  const t = x - i0;
+  return VOWEL_FORMANTS[i0].map((a, k) => a + (VOWEL_FORMANTS[i0 + 1][k] - a) * t);
+}
+
 function filterMagnitudeDb(freq, cutoff, reso, type) {
-  const s = freq / Math.max(cutoff, 1);
   const k = 2 - 1.9 * clamp(reso, 0, 1);
-  const denom = Math.sqrt((1 - s * s) ** 2 + (k * s) ** 2);
+  const svf = (fc, kind) => {
+    const s = freq / Math.max(fc, 1);
+    const denom = Math.sqrt((1 - s * s) ** 2 + (k * s) ** 2);
+    if (kind === "lp") return 1 / denom;
+    if (kind === "hp") return (s * s) / denom;
+    if (kind === "bp") return (k * s) / denom;
+    return Math.abs(1 - s * s) / denom; // notch
+  };
   let mag;
-  if (type === 0) mag = 1 / denom;
-  else if (type === 1) mag = 1 / (denom * denom);
-  else if (type === 2) mag = (s * s) / denom;
-  else mag = (k * s) / denom;
+  if (type === 0) mag = svf(cutoff, "lp");
+  else if (type === 1) mag = svf(cutoff, "lp") ** 2;
+  else if (type === 2) mag = svf(cutoff, "hp");
+  else if (type === 3) mag = svf(cutoff, "bp");
+  else if (type === 4) mag = svf(cutoff, "nt");
+  else if (type === 5 || type === 6) {
+    // Feedback comb ripple: |H| = comp / |1 ∓ fb·e^{-jωd}| with d = sr/fc.
+    const fb = 0.5 + 0.48 * clamp(reso, 0, 1);
+    const phase = (2 * Math.PI * freq) / Math.max(cutoff, 1);
+    const sign = type === 5 ? 1 : -1;
+    const re = 1 - sign * fb * Math.cos(phase);
+    const im = sign * fb * Math.sin(phase);
+    mag = (1 - 0.5 * fb) / Math.max(Math.hypot(re, im), 1e-4);
+  } else {
+    // Formant: sum of three band-passes at the vowel's F1/F2/F3.
+    const t = (Math.log(clamp(cutoff, 200, 4000)) - Math.log(200)) / (Math.log(4000) - Math.log(200));
+    mag = vowelFreqsAt(t).reduce((acc, fc, i) => acc + svf(fc, "bp") * VOWEL_AMPS[i], 0);
+  }
   return 20 * Math.log10(Math.max(mag, 1e-6));
 }
 

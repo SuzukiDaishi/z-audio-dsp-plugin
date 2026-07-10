@@ -1,11 +1,13 @@
 //! The wavetable synth's parameter surface.
 //!
-//! Web ids 500-603 — the next free block (simple synth 100s, sampler
+//! Web ids 500-607 — the next free block (simple synth 100s, sampler
 //! 300s, granular 400s). A future native VST3/CLAP build must mirror
 //! these ids one-to-one.
 //!
 //! Layout: 500s globals, 510s OSC A, 530s OSC B, 550s filter, 560s
-//! envelopes, 570s LFOs, 580-603 the 8×3 mod matrix.
+//! envelopes, 570s LFOs, 580-603 the 8×3 mod matrix, 604-607 the
+//! global distortion. Ids are append-only: saved states replay every
+//! id through `set_param`, so renumbering 500-603 breaks old projects.
 
 use wclap_plugin::{ParamDef, PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED};
 
@@ -30,7 +32,24 @@ pub const OSC_PHASE: u32 = 9;
 pub const OSC_RAND_PHASE: u32 = 10;
 pub const OSC_PAN: u32 = 11;
 pub const OSC_LEVEL: u32 = 12;
-pub const OSC_FIELDS: u32 = 13;
+pub const OSC_WARP_MODE: u32 = 13;
+pub const OSC_WARP_AMT: u32 = 14;
+pub const OSC_FIELDS: u32 = 15;
+
+/// Warp modes, in stepped-parameter order (Serum-style phase distortion
+/// plus cross-oscillator FM/RM/AM using the other oscillator's previous
+/// sample as the modulator).
+pub const W_OFF: u8 = 0;
+pub const W_BEND_P: u8 = 1;
+pub const W_BEND_M: u8 = 2;
+pub const W_SYNC: u8 = 3;
+pub const W_MIRROR: u8 = 4;
+pub const W_SQUEEZE: u8 = 5;
+pub const W_QUANTIZE: u8 = 6;
+pub const W_FM: u8 = 7;
+pub const W_RM: u8 = 8;
+pub const W_AM: u8 = 9;
+pub const WARP_MODE_COUNT: usize = 10;
 
 pub const P_FILTER_ENABLE: u32 = 550;
 pub const P_FILTER_TYPE: u32 = 551;
@@ -41,6 +60,32 @@ pub const P_FILTER_KEYTRACK: u32 = 555;
 pub const P_FILTER_MIX: u32 = 556;
 pub const P_FILTER_ROUTE_A: u32 = 557;
 pub const P_FILTER_ROUTE_B: u32 = 558;
+
+/// Filter types, in stepped-parameter order. 0-3 predate the growl
+/// expansion — never reorder them.
+pub const FT_LP12: u8 = 0;
+pub const FT_LP24: u8 = 1;
+pub const FT_HP12: u8 = 2;
+pub const FT_BP12: u8 = 3;
+pub const FT_NOTCH12: u8 = 4;
+pub const FT_COMB_P: u8 = 5;
+pub const FT_COMB_M: u8 = 6;
+pub const FT_FORMANT: u8 = 7;
+pub const FILTER_TYPE_COUNT: usize = 8;
+
+/// Global distortion (master bus, post-voice-sum / pre-master-gain).
+pub const P_DIST_ENABLE: u32 = 604;
+pub const P_DIST_MODE: u32 = 605;
+pub const P_DIST_DRIVE: u32 = 606;
+pub const P_DIST_MIX: u32 = 607;
+
+/// Distortion modes, in stepped-parameter order.
+pub const DIST_TANH: u8 = 0;
+pub const DIST_HARD: u8 = 1;
+pub const DIST_FOLD: u8 = 2;
+pub const DIST_SINE: u8 = 3;
+pub const DIST_CRUSH: u8 = 4;
+pub const DIST_MODE_COUNT: usize = 5;
 
 /// Envelope field offsets from the block base (ENV1=560, ENV2=565).
 pub const ENV1_BASE: u32 = 560;
@@ -93,7 +138,13 @@ pub const DST_B_PAN: usize = 8;
 pub const DST_CUTOFF: usize = 9;
 pub const DST_RESO: usize = 10;
 pub const DST_MASTER: usize = 11;
-pub const DST_COUNT: usize = 12;
+// Appended by the growl expansion (preset compat: never renumber).
+pub const DST_A_WARP: usize = 12;
+pub const DST_B_WARP: usize = 13;
+pub const DST_DIST_DRIVE: usize = 14;
+pub const DST_A_UNI_DET: usize = 15;
+pub const DST_B_UNI_DET: usize = 16;
+pub const DST_COUNT: usize = 17;
 
 fn def(id: u32, name: &'static [u8], min: f64, max: f64, default: f64, stepped: bool) -> ParamDef {
     ParamDef {
@@ -128,6 +179,8 @@ fn osc_defs(defs: &mut Vec<ParamDef>, base: u32, enabled: f64) {
             b"A Rand Phase\0",
             b"A Pan\0",
             b"A Level\0",
+            b"A Warp Mode\0",
+            b"A Warp Amt\0",
         ]
     } else {
         &[
@@ -144,6 +197,8 @@ fn osc_defs(defs: &mut Vec<ParamDef>, base: u32, enabled: f64) {
             b"B Rand Phase\0",
             b"B Pan\0",
             b"B Level\0",
+            b"B Warp Mode\0",
+            b"B Warp Amt\0",
         ]
     };
     defs.push(def(base + OSC_ENABLE, names[0], 0.0, 1.0, enabled, true));
@@ -166,6 +221,15 @@ fn osc_defs(defs: &mut Vec<ParamDef>, base: u32, enabled: f64) {
     defs.push(def(base + OSC_RAND_PHASE, names[10], 0.0, 1.0, 1.0, false));
     defs.push(def(base + OSC_PAN, names[11], -1.0, 1.0, 0.0, false));
     defs.push(def(base + OSC_LEVEL, names[12], 0.0, 1.0, 0.75, false));
+    defs.push(def(
+        base + OSC_WARP_MODE,
+        names[13],
+        0.0,
+        (WARP_MODE_COUNT - 1) as f64,
+        0.0,
+        true,
+    ));
+    defs.push(def(base + OSC_WARP_AMT, names[14], 0.0, 1.0, 0.0, false));
 }
 
 fn env_defs(defs: &mut Vec<ParamDef>, base: u32, sustain: f64) {
@@ -210,7 +274,9 @@ fn lfo_defs(defs: &mut Vec<ParamDef>, base: u32) {
         ]
     };
     defs.push(def(base + LFO_WAVE, names[0], 0.0, 4.0, 0.0, true));
-    defs.push(def(base + LFO_RATE, names[1], 0.01, 20.0, 2.0, false));
+    // 50 Hz ceiling: fast growl wobble territory (no host tempo sync in
+    // the WebCLAP scaffold, so raw rate is the only option).
+    defs.push(def(base + LFO_RATE, names[1], 0.01, 50.0, 2.0, false));
     defs.push(def(base + LFO_PHASE, names[2], 0.0, 1.0, 0.0, false));
     defs.push(def(base + LFO_RETRIG, names[3], 0.0, 1.0, 1.0, true));
 }
@@ -233,7 +299,14 @@ pub fn param_defs() -> Vec<ParamDef> {
         1.0,
         true,
     ));
-    defs.push(def(P_FILTER_TYPE, b"Filter Type\0", 0.0, 3.0, 0.0, true));
+    defs.push(def(
+        P_FILTER_TYPE,
+        b"Filter Type\0",
+        0.0,
+        (FILTER_TYPE_COUNT - 1) as f64,
+        0.0,
+        true,
+    ));
     defs.push(def(
         P_FILTER_CUTOFF,
         b"Cutoff\0",
@@ -285,6 +358,18 @@ pub fn param_defs() -> Vec<ParamDef> {
         ));
         defs.push(def(base + MOD_AMOUNT, names[2], -1.0, 1.0, 0.0, false));
     }
+
+    defs.push(def(P_DIST_ENABLE, b"Dist Enable\0", 0.0, 1.0, 0.0, true));
+    defs.push(def(
+        P_DIST_MODE,
+        b"Dist Mode\0",
+        0.0,
+        (DIST_MODE_COUNT - 1) as f64,
+        0.0,
+        true,
+    ));
+    defs.push(def(P_DIST_DRIVE, b"Dist Drive\0", 0.0, 1.0, 0.3, false));
+    defs.push(def(P_DIST_MIX, b"Dist Mix\0", 0.0, 1.0, 1.0, false));
     defs
 }
 
@@ -295,10 +380,10 @@ mod tests {
     #[test]
     fn id_blocks_are_well_formed() {
         let defs = param_defs();
-        assert_eq!(defs.len(), 4 + 13 * 2 + 9 + 5 * 2 + 4 * 2 + 24);
+        assert_eq!(defs.len(), 4 + 15 * 2 + 9 + 5 * 2 + 4 * 2 + 24 + 4);
         let mut seen = std::collections::HashSet::new();
         for def in &defs {
-            assert!((500..=603).contains(&def.id), "id {} out of block", def.id);
+            assert!((500..=607).contains(&def.id), "id {} out of block", def.id);
             assert!(seen.insert(def.id), "duplicate id {}", def.id);
             assert!(def.min < def.max);
             assert!(def.default >= def.min && def.default <= def.max);

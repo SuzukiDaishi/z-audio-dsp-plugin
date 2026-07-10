@@ -26,6 +26,7 @@
             <div class="panel-head">
               <h2 class="section-title">OSC A</h2>
               <div class="table-picker" id="osc-a-table"></div>
+              <span class="warp-pick" id="osc-a-warp" title="Warp mode"></span>
               <span class="head-toggle" id="osc-a-enable"></span>
             </div>
             <div class="viz wave-viz">
@@ -38,6 +39,7 @@
             <div class="panel-head">
               <h2 class="section-title">OSC B</h2>
               <div class="table-picker" id="osc-b-table"></div>
+              <span class="warp-pick" id="osc-b-warp" title="Warp mode"></span>
               <span class="head-toggle" id="osc-b-enable"></span>
             </div>
             <div class="viz wave-viz">
@@ -124,9 +126,18 @@
             </div>
             <div id="matrix"></div>
           </section>
+          <section class="section" id="sec-dist">
+            <div class="panel-head">
+              <h2 class="section-title">Distortion</h2>
+              <span class="head-toggle" id="dist-enable"></span>
+            </div>
+            <div id="dist-mode"></div>
+            <div class="knob-grid cols-2" id="dist-knobs"></div>
+          </section>
           <section class="section">
             <div class="panel-head">
               <h2 class="section-title">Global</h2>
+              <span class="preset-pick" id="preset-mount" title="Factory presets"></span>
             </div>
             <div class="knob-grid cols-3" id="global-knobs"></div>
           </section>

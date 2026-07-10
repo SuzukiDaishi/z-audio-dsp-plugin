@@ -42,6 +42,8 @@ pub struct OscParams {
     pub rand_phase: f32,
     pub pan: f32,
     pub level: f32,
+    pub warp_mode: u8,
+    pub warp_amount: f32,
 }
 
 impl OscParams {
@@ -60,6 +62,8 @@ impl OscParams {
             rand_phase: 1.0,
             pan: 0.0,
             level: 0.75,
+            warp_mode: W_OFF,
+            warp_amount: 0.0,
         }
     }
 }
@@ -133,6 +137,10 @@ pub struct SynthParams {
     pub lfo1: LfoParams,
     pub lfo2: LfoParams,
     pub mods: [ModSlot; MOD_SLOTS as usize],
+    pub dist_enable: bool,
+    pub dist_mode: u8,
+    pub dist_drive: f32,
+    pub dist_mix: f32,
 }
 
 impl Default for SynthParams {
@@ -158,6 +166,10 @@ impl Default for SynthParams {
             lfo1: LfoParams::default(),
             lfo2: LfoParams::default(),
             mods: [ModSlot::default(); MOD_SLOTS as usize],
+            dist_enable: false,
+            dist_mode: DIST_TANH,
+            dist_drive: 0.3,
+            dist_mix: 1.0,
         }
     }
 }
@@ -451,6 +463,118 @@ fn soft_clip(x: f32) -> f32 {
 }
 
 // ---------------------------------------------------------------------------
+// Oscillator warp (Serum-style)
+// ---------------------------------------------------------------------------
+
+/// Per-block warp constants. Phase warps (`phase`) remap each unison
+/// voice's phase before the table lookup; RM/AM (`post_gain`) scale the
+/// oscillator's summed sample instead. All per-sample math is algebraic —
+/// no transcendentals in the audio path.
+#[derive(Clone, Copy)]
+struct WarpKernel {
+    mode: u8,
+    a: f32,
+    k1: f32,
+    k2: f32,
+}
+
+impl WarpKernel {
+    fn new(mode: u8, amount: f32) -> Self {
+        let a = amount.clamp(0.0, 1.0);
+        let (k1, k2) = match mode {
+            W_SYNC => (1.0 + 7.0 * a, 0.0),
+            W_SQUEEZE => (1.0 / (1.0 - 0.95 * a), 0.0),
+            W_QUANTIZE => {
+                let n = (64.0 - 62.0 * a).round().max(2.0);
+                (n, 1.0 / n)
+            }
+            W_FM => (0.5 * a, 0.0),
+            _ => (0.0, 0.0),
+        };
+        Self {
+            mode: if a <= 0.0 { W_OFF } else { mode },
+            a,
+            k1,
+            k2,
+        }
+    }
+
+    /// Warp a phase in [0,1). `other` is the 1-sample-delayed raw sample
+    /// of the opposite oscillator (the FM modulator).
+    #[inline]
+    fn phase(&self, p: f32, other: f32) -> f32 {
+        match self.mode {
+            W_BEND_P => p + self.a * (p * p - p),
+            W_BEND_M => p + self.a * (p - p * p),
+            W_SYNC => {
+                let x = p * self.k1;
+                x - x.floor()
+            }
+            W_MIRROR => {
+                let pm = if p < 0.5 { 2.0 * p } else { 2.0 * (1.0 - p) };
+                p + self.a * (pm - p)
+            }
+            W_SQUEEZE => (p * self.k1).min(0.999_999),
+            W_QUANTIZE => (p * self.k1).floor() * self.k2,
+            W_FM => {
+                let x = p + self.k1 * other;
+                x - x.floor()
+            }
+            _ => p,
+        }
+    }
+
+    /// Post-lookup gain for the RM/AM modes, 1.0 otherwise.
+    #[inline]
+    fn post_gain(&self, other: f32) -> f32 {
+        match self.mode {
+            W_RM => 1.0 + self.a * (other - 1.0),
+            W_AM => (1.0 + self.a * other) / (1.0 + self.a),
+            _ => 1.0,
+        }
+    }
+}
+
+/// One distortion transfer function on a pre-gained sample. Crush is
+/// handled separately (it needs the sample-hold state).
+#[inline]
+fn distort(mode: u8, x: f32) -> f32 {
+    match mode {
+        DIST_HARD => x.clamp(-1.0, 1.0),
+        DIST_FOLD => {
+            // Triangle foldback: identity in [-1,1], reflects beyond.
+            let g = x - 4.0 * ((x + 2.0) * 0.25).floor();
+            if g.abs() > 1.0 {
+                g.signum() * (2.0 - g.abs())
+            } else {
+                g
+            }
+        }
+        // Master bus only, so a real sin() per sample is affordable.
+        DIST_SINE => (core::f32::consts::FRAC_PI_2 * x.clamp(-3.0, 3.0)).sin(),
+        _ => soft_clip(x),
+    }
+}
+
+/// Extra octaves of bandwidth a warp adds — biases the mip pick down so
+/// phase warps stay (approximately) alias-free. Quantize/RM/AM return 0:
+/// their aliasing is intentional grit, tested only for boundedness.
+fn warp_octaves(mode: u8, amount: f32) -> f32 {
+    let a = amount.clamp(0.0, 1.0);
+    if a <= 0.0 {
+        return 0.0;
+    }
+    match mode {
+        W_SYNC => (1.0 + 7.0 * a).log2(),
+        W_BEND_P | W_BEND_M => (1.0 + a).log2(),
+        W_MIRROR => a,
+        W_SQUEEZE => (1.0 / (1.0 - 0.95 * a)).log2(),
+        W_FM => 1.5 * a,
+        _ => 0.0,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Unison oscillator
 // ---------------------------------------------------------------------------
 
@@ -546,10 +670,23 @@ struct Voice {
     lfo2: Lfo,
     osc_a: UnisonOsc,
     osc_b: UnisonOsc,
+    /// 1-sample-delayed raw table samples (unison voice 0, pre-gain) —
+    /// the FM/RM/AM modulator taps. The z⁻¹ makes A→B, B→A and mutual
+    /// cross-modulation all well-defined regardless of render order.
+    fm_a_prev: f32,
+    fm_b_prev: f32,
     svf1_l: SvfState,
     svf1_r: SvfState,
     svf2_l: SvfState,
     svf2_r: SvfState,
+    /// Third SVF pair — the Formant filter runs three parallel bands.
+    svf3_l: SvfState,
+    svf3_r: SvfState,
+    /// Cutoff-tracked feedback comb delay lines (sized in
+    /// `set_sample_rate` for a 20 Hz floor; ~2.4k samples/ch at 48 kHz).
+    comb_l: Vec<f32>,
+    comb_r: Vec<f32>,
+    comb_pos: usize,
 }
 
 impl Voice {
@@ -568,10 +705,17 @@ impl Voice {
             lfo2: Lfo::new(seed.wrapping_mul(40503).wrapping_add(7)),
             osc_a: UnisonOsc::new(),
             osc_b: UnisonOsc::new(),
+            fm_a_prev: 0.0,
+            fm_b_prev: 0.0,
             svf1_l: SvfState::default(),
             svf1_r: SvfState::default(),
             svf2_l: SvfState::default(),
             svf2_r: SvfState::default(),
+            svf3_l: SvfState::default(),
+            svf3_r: SvfState::default(),
+            comb_l: Vec::new(),
+            comb_r: Vec::new(),
+            comb_pos: 0,
         }
     }
 }
@@ -590,6 +734,11 @@ struct ModOffsets {
     cutoff_oct: f32,
     reso: f32,
     master: f32,
+    a_warp: f32,
+    b_warp: f32,
+    dist_drive: f32,
+    a_det: f32,
+    b_det: f32,
 }
 
 // ---------------------------------------------------------------------------
@@ -610,6 +759,9 @@ pub struct SynthEngine {
     free_lfo2: Lfo,
     /// Smoothed master gain (one-pole per control block).
     master_smooth: f32,
+    /// Sample-hold state for the Crush distortion mode.
+    decim_counter: u32,
+    decim_hold: (f32, f32),
 }
 
 impl SynthEngine {
@@ -618,7 +770,7 @@ impl SynthEngine {
         for i in 0..MAX_VOICES {
             voices.push(Voice::new(0x9E37_79B9 ^ (i as u32) << 8));
         }
-        Self {
+        let mut e = Self {
             params: SynthParams::default(),
             tables: WavetableSet::factory(),
             voices,
@@ -630,7 +782,11 @@ impl SynthEngine {
             free_lfo1: Lfo::new(0xA511_E9B3),
             free_lfo2: Lfo::new(0x1234_5678),
             master_smooth: 0.8,
-        }
+            decim_counter: 0,
+            decim_hold: (0.0, 0.0),
+        };
+        e.resize_combs();
+        e
     }
 
     pub fn params(&self) -> &SynthParams {
@@ -648,6 +804,20 @@ impl SynthEngine {
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate.max(8_000.0);
         self.inv_sample_rate = 1.0 / self.sample_rate;
+        self.resize_combs();
+    }
+
+    /// (Re)size every voice's comb delay line for a 20 Hz floor at the
+    /// current sample rate.
+    fn resize_combs(&mut self) {
+        let len = (self.sample_rate / 20.0).ceil() as usize + 4;
+        for v in &mut self.voices {
+            if v.comb_l.len() != len {
+                v.comb_l = vec![0.0; len];
+                v.comb_r = vec![0.0; len];
+                v.comb_pos = 0;
+            }
+        }
     }
 
     pub fn reset_voices(&mut self) {
@@ -662,6 +832,13 @@ impl SynthEngine {
             v.svf1_r = SvfState::default();
             v.svf2_l = SvfState::default();
             v.svf2_r = SvfState::default();
+            v.svf3_l = SvfState::default();
+            v.svf3_r = SvfState::default();
+            v.comb_l.fill(0.0);
+            v.comb_r.fill(0.0);
+            v.comb_pos = 0;
+            v.fm_a_prev = 0.0;
+            v.fm_b_prev = 0.0;
         }
     }
 
@@ -698,6 +875,8 @@ impl SynthEngine {
 
     /// Fill `out` with one oscillator's single cycle at an arbitrary WT
     /// position — the UI's pseudo-3D stack view samples every frame.
+    /// Phase warps show up in the preview; FM/RM/AM need the other
+    /// oscillator's live signal, so they draw unwarped.
     pub fn preview_wave_at(&self, osc_b: bool, pos: f32, out: &mut [f32]) {
         let p = if osc_b {
             &self.params.osc_b
@@ -705,9 +884,14 @@ impl SynthEngine {
             &self.params.osc_a
         };
         let table = self.tables.table(p.table as usize);
+        let kernel = if p.warp_mode <= W_QUANTIZE {
+            WarpKernel::new(p.warp_mode, p.warp_amount)
+        } else {
+            WarpKernel::new(W_OFF, 0.0)
+        };
         let n = out.len().max(1);
         for (i, v) in out.iter_mut().enumerate() {
-            *v = table.sample(i as f32 / n as f32, pos, 0, 0.0);
+            *v = table.sample(kernel.phase(i as f32 / n as f32, 0.0), pos, 0, 0.0);
         }
     }
 
@@ -767,6 +951,12 @@ impl SynthEngine {
         }
         v.osc_a.trigger(&self.params.osc_a, &mut rng);
         v.osc_b.trigger(&self.params.osc_b, &mut rng);
+        v.fm_a_prev = 0.0;
+        v.fm_b_prev = 0.0;
+        // Stolen voices must not ring with the previous note's comb tail.
+        v.comb_l.fill(0.0);
+        v.comb_r.fill(0.0);
+        v.comb_pos = 0;
     }
 
     pub fn note_off(&mut self, key: u8) {
@@ -801,7 +991,10 @@ impl SynthEngine {
 
         // Master smoothing toward the (possibly mod-shifted) target happens
         // after voice mods are known; collect the largest master offset.
+        // Distortion drive follows the same max-abs pattern (it is a bus
+        // effect, so per-voice offsets collapse to one value per block).
         let mut master_mod = 0.0f32;
+        let mut dist_mod = 0.0f32;
 
         for vi in 0..self.voices.len() {
             let voice = &mut self.voices[vi];
@@ -858,6 +1051,11 @@ impl SynthEngine {
                     DST_CUTOFF => m.cutoff_oct += x * CUTOFF_MOD_OCTAVES,
                     DST_RESO => m.reso += x,
                     DST_MASTER => m.master += x,
+                    DST_A_WARP => m.a_warp += x,
+                    DST_B_WARP => m.b_warp += x,
+                    DST_DIST_DRIVE => m.dist_drive += x,
+                    DST_A_UNI_DET => m.a_det += x,
+                    DST_B_UNI_DET => m.b_det += x,
                     _ => {}
                 }
             }
@@ -866,33 +1064,50 @@ impl SynthEngine {
             } else {
                 m.master
             };
+            dist_mod = if dist_mod.abs() > m.dist_drive.abs() {
+                dist_mod
+            } else {
+                m.dist_drive
+            };
 
-            // Effective oscillator settings for this block.
-            let a_wt = (p.osc_a.wt_pos + m.a_wt).clamp(0.0, 1.0);
-            let b_wt = (p.osc_b.wt_pos + m.b_wt).clamp(0.0, 1.0);
-            let a_level = (p.osc_a.level + m.a_level).clamp(0.0, 1.0);
-            let b_level = (p.osc_b.level + m.b_level).clamp(0.0, 1.0);
-            let a_pan = (p.osc_a.pan + m.a_pan).clamp(-1.0, 1.0);
-            let b_pan = (p.osc_b.pan + m.b_pan).clamp(-1.0, 1.0);
-            voice.osc_a.update_control(&p.osc_a, a_pan, a_level);
-            voice.osc_b.update_control(&p.osc_b, b_pan, b_level);
+            // Effective oscillator settings for this block: start from the
+            // params and fold in the modulated warp amount / unison detune
+            // (the copies also feed `mip_for_increment`, keeping the alias
+            // guarantee under modulation).
+            let mut oa = p.osc_a;
+            let mut ob = p.osc_b;
+            oa.warp_amount = (oa.warp_amount + m.a_warp).clamp(0.0, 1.0);
+            ob.warp_amount = (ob.warp_amount + m.b_warp).clamp(0.0, 1.0);
+            oa.uni_detune = (oa.uni_detune + m.a_det).clamp(0.0, 1.0);
+            ob.uni_detune = (ob.uni_detune + m.b_det).clamp(0.0, 1.0);
+            let a_kernel = WarpKernel::new(oa.warp_mode, oa.warp_amount);
+            let b_kernel = WarpKernel::new(ob.warp_mode, ob.warp_amount);
+
+            let a_wt = (oa.wt_pos + m.a_wt).clamp(0.0, 1.0);
+            let b_wt = (ob.wt_pos + m.b_wt).clamp(0.0, 1.0);
+            let a_level = (oa.level + m.a_level).clamp(0.0, 1.0);
+            let b_level = (ob.level + m.b_level).clamp(0.0, 1.0);
+            let a_pan = (oa.pan + m.a_pan).clamp(-1.0, 1.0);
+            let b_pan = (ob.pan + m.b_pan).clamp(-1.0, 1.0);
+            voice.osc_a.update_control(&oa, a_pan, a_level);
+            voice.osc_b.update_control(&ob, b_pan, b_level);
 
             let a_semis = voice.note_pitch - 69.0
-                + p.osc_a.octave as f32 * 12.0
-                + p.osc_a.semi as f32
-                + p.osc_a.fine_cents / 100.0
+                + oa.octave as f32 * 12.0
+                + oa.semi as f32
+                + oa.fine_cents / 100.0
                 + m.a_pitch;
             let b_semis = voice.note_pitch - 69.0
-                + p.osc_b.octave as f32 * 12.0
-                + p.osc_b.semi as f32
-                + p.osc_b.fine_cents / 100.0
+                + ob.octave as f32 * 12.0
+                + ob.semi as f32
+                + ob.fine_cents / 100.0
                 + m.b_pitch;
             let a_inc = 440.0 * (a_semis / 12.0).exp2() * self.inv_sample_rate;
             let b_inc = 440.0 * (b_semis / 12.0).exp2() * self.inv_sample_rate;
 
             // Mip pick: highest unison voice must stay under Nyquist.
-            let a_mip = mip_for_increment(a_inc, &p.osc_a);
-            let b_mip = mip_for_increment(b_inc, &p.osc_b);
+            let a_mip = mip_for_increment(a_inc, &oa);
+            let b_mip = mip_for_increment(b_inc, &ob);
 
             // Filter coefficients (keytrack shifts cutoff with the note).
             let keytrack_oct = p.keytrack * (voice.note_pitch - 60.0) / 12.0;
@@ -902,30 +1117,67 @@ impl SynthEngine {
             let drive_gain = 1.0 + p.drive * 6.0;
             let drive_comp = 1.0 / (1.0 + p.drive * 1.5);
 
+            // Comb: cutoff-tracked fractional delay, resonance sets the
+            // feedback. Stable for |fb| < 1; comp keeps loudness in check.
+            let comb_len = voice.comb_l.len().max(4);
+            let is_comb = p.filter_type == FT_COMB_P || p.filter_type == FT_COMB_M;
+            let (comb_delay, comb_fb, comb_comp) = if is_comb {
+                let d = (self.sample_rate / cutoff.max(20.0)).clamp(2.0, (comb_len - 2) as f32);
+                let mag = 0.50 + 0.48 * reso;
+                let fb = if p.filter_type == FT_COMB_M { -mag } else { mag };
+                (d, fb, 1.0 - 0.5 * mag)
+            } else {
+                (0.0, 0.0, 1.0)
+            };
+            // Formant: the cutoff knob's log position picks the vowel
+            // (200 Hz = "a" … 4 kHz = "u"), three parallel band-passes.
+            let formant_coeffs = if p.filter_type == FT_FORMANT {
+                let t = (cutoff.max(1.0).ln() - 200.0f32.ln())
+                    / (4000.0f32.ln() - 200.0f32.ln());
+                let (freqs, _bws) = crate::wavetable::vowel_at(t.clamp(0.0, 1.0));
+                [
+                    SvfCoeffs::compute(freqs[0], reso, self.sample_rate),
+                    SvfCoeffs::compute(freqs[1], reso, self.sample_rate),
+                    SvfCoeffs::compute(freqs[2], reso, self.sample_rate),
+                ]
+            } else {
+                [coeffs; 3]
+            };
+
             // ---- audio-rate render ---------------------------------------
-            let table_a = self.tables.table(p.osc_a.table as usize);
-            let table_b = self.tables.table(p.osc_b.table as usize);
+            let table_a = self.tables.table(oa.table as usize);
+            let table_b = self.tables.table(ob.table as usize);
             let route_a = p.filter_enable && p.route_a;
             let route_b = p.filter_enable && p.route_b;
-            let n_uni_a = (p.osc_a.unison as usize).clamp(1, MAX_UNISON);
-            let n_uni_b = (p.osc_b.unison as usize).clamp(1, MAX_UNISON);
+            let n_uni_a = (oa.unison as usize).clamp(1, MAX_UNISON);
+            let n_uni_b = (ob.unison as usize).clamp(1, MAX_UNISON);
 
             for i in 0..n {
                 let mut wet_l = 0.0f32;
                 let mut wet_r = 0.0f32;
                 let mut dry_l = 0.0f32;
                 let mut dry_r = 0.0f32;
+                // Raw unison-voice-0 samples become next sample's FM taps.
+                let mut raw_a = 0.0f32;
+                let mut raw_b = 0.0f32;
 
-                if p.osc_a.enable {
+                if oa.enable {
                     let mut l = 0.0f32;
                     let mut r = 0.0f32;
                     for u in 0..n_uni_a {
-                        let s = table_a.sample(voice.osc_a.phases[u], a_wt, a_mip.0, a_mip.1);
+                        let ph = a_kernel.phase(voice.osc_a.phases[u], voice.fm_b_prev);
+                        let s = table_a.sample(ph, a_wt, a_mip.0, a_mip.1);
+                        if u == 0 {
+                            raw_a = s;
+                        }
                         l += s * voice.osc_a.gains_l[u];
                         r += s * voice.osc_a.gains_r[u];
                         let ph = voice.osc_a.phases[u] + a_inc * voice.osc_a.ratios[u];
                         voice.osc_a.phases[u] = ph - ph.floor();
                     }
+                    let g = a_kernel.post_gain(voice.fm_b_prev);
+                    l *= g;
+                    r *= g;
                     if route_a {
                         wet_l += l;
                         wet_r += r;
@@ -934,16 +1186,23 @@ impl SynthEngine {
                         dry_r += r;
                     }
                 }
-                if p.osc_b.enable {
+                if ob.enable {
                     let mut l = 0.0f32;
                     let mut r = 0.0f32;
                     for u in 0..n_uni_b {
-                        let s = table_b.sample(voice.osc_b.phases[u], b_wt, b_mip.0, b_mip.1);
+                        let ph = b_kernel.phase(voice.osc_b.phases[u], voice.fm_a_prev);
+                        let s = table_b.sample(ph, b_wt, b_mip.0, b_mip.1);
+                        if u == 0 {
+                            raw_b = s;
+                        }
                         l += s * voice.osc_b.gains_l[u];
                         r += s * voice.osc_b.gains_r[u];
                         let ph = voice.osc_b.phases[u] + b_inc * voice.osc_b.ratios[u];
                         voice.osc_b.phases[u] = ph - ph.floor();
                     }
+                    let g = b_kernel.post_gain(voice.fm_a_prev);
+                    l *= g;
+                    r *= g;
                     if route_b {
                         wet_l += l;
                         wet_r += r;
@@ -952,21 +1211,20 @@ impl SynthEngine {
                         dry_r += r;
                     }
                 }
+                voice.fm_a_prev = raw_a;
+                voice.fm_b_prev = raw_b;
 
                 let (mut out_l, mut out_r) = (dry_l, dry_r);
                 if p.filter_enable {
                     let x_l = soft_clip(wet_l * drive_gain) * drive_comp;
                     let x_r = soft_clip(wet_r * drive_gain) * drive_comp;
                     let (f_l, f_r) = match p.filter_type {
-                        0 => {
-                            // LP12
-                            (
-                                voice.svf1_l.tick(x_l, &coeffs).0,
-                                voice.svf1_r.tick(x_r, &coeffs).0,
-                            )
-                        }
-                        1 => {
-                            // LP24: two cascaded LP12 stages
+                        FT_LP12 => (
+                            voice.svf1_l.tick(x_l, &coeffs).0,
+                            voice.svf1_r.tick(x_r, &coeffs).0,
+                        ),
+                        FT_LP24 => {
+                            // Two cascaded LP12 stages.
                             let l1 = voice.svf1_l.tick(x_l, &coeffs).0;
                             let r1 = voice.svf1_r.tick(x_r, &coeffs).0;
                             (
@@ -974,18 +1232,52 @@ impl SynthEngine {
                                 voice.svf2_r.tick(r1, &coeffs).0,
                             )
                         }
-                        2 => {
-                            // HP12
-                            (
-                                voice.svf1_l.tick(x_l, &coeffs).2,
-                                voice.svf1_r.tick(x_r, &coeffs).2,
-                            )
-                        }
-                        _ => {
-                            // BP12 (band output scaled by k for unity peak)
+                        FT_HP12 => (
+                            voice.svf1_l.tick(x_l, &coeffs).2,
+                            voice.svf1_r.tick(x_r, &coeffs).2,
+                        ),
+                        FT_BP12 => {
+                            // Band output scaled by k for unity peak.
                             let bl = voice.svf1_l.tick(x_l, &coeffs).1;
                             let br = voice.svf1_r.tick(x_r, &coeffs).1;
                             (bl * coeffs.k, br * coeffs.k)
+                        }
+                        FT_NOTCH12 => {
+                            let (ll, _, hl) = voice.svf1_l.tick(x_l, &coeffs);
+                            let (lr, _, hr) = voice.svf1_r.tick(x_r, &coeffs);
+                            (ll + hl, lr + hr)
+                        }
+                        FT_COMB_P | FT_COMB_M => {
+                            // y[n] = x[n] ± fb·y[n-d], fractional read.
+                            let rp = voice.comb_pos as f32 - comb_delay;
+                            let rp = if rp < 0.0 { rp + comb_len as f32 } else { rp };
+                            let i0 = (rp as usize).min(comb_len - 1);
+                            let i1 = if i0 + 1 >= comb_len { 0 } else { i0 + 1 };
+                            let fr = rp - i0 as f32;
+                            let dl = voice.comb_l[i0] + (voice.comb_l[i1] - voice.comb_l[i0]) * fr;
+                            let dr = voice.comb_r[i0] + (voice.comb_r[i1] - voice.comb_r[i0]) * fr;
+                            let yl = x_l + comb_fb * dl;
+                            let yr = x_r + comb_fb * dr;
+                            voice.comb_l[voice.comb_pos] = flush_denormal(yl);
+                            voice.comb_r[voice.comb_pos] = flush_denormal(yr);
+                            voice.comb_pos += 1;
+                            if voice.comb_pos >= comb_len {
+                                voice.comb_pos = 0;
+                            }
+                            (yl * comb_comp, yr * comb_comp)
+                        }
+                        _ => {
+                            // Formant: three parallel band-passes at the
+                            // interpolated vowel's F1/F2/F3.
+                            use crate::wavetable::VOWEL_AMPS;
+                            let c = &formant_coeffs;
+                            let fl = voice.svf1_l.tick(x_l, &c[0]).1 * c[0].k * VOWEL_AMPS[0]
+                                + voice.svf2_l.tick(x_l, &c[1]).1 * c[1].k * VOWEL_AMPS[1]
+                                + voice.svf3_l.tick(x_l, &c[2]).1 * c[2].k * VOWEL_AMPS[2];
+                            let fr = voice.svf1_r.tick(x_r, &c[0]).1 * c[0].k * VOWEL_AMPS[0]
+                                + voice.svf2_r.tick(x_r, &c[1]).1 * c[1].k * VOWEL_AMPS[1]
+                                + voice.svf3_r.tick(x_r, &c[2]).1 * c[2].k * VOWEL_AMPS[2];
+                            (fl, fr)
                         }
                     };
                     out_l += wet_l + (f_l - wet_l) * p.filter_mix;
@@ -1005,9 +1297,39 @@ impl SynthEngine {
             voice.svf1_r.flush();
             voice.svf2_l.flush();
             voice.svf2_r.flush();
+            voice.svf3_l.flush();
+            voice.svf3_r.flush();
 
             if voice.env1.is_idle() {
                 voice.active = false;
+            }
+        }
+
+        // Global distortion: voice sum → shaper → master gain.
+        if p.dist_enable {
+            let drive = (p.dist_drive + dist_mod).clamp(0.0, 1.0);
+            let gain = 1.0 + drive * 11.0;
+            let comp = 1.0 / (1.0 + drive * 2.0);
+            let mix = p.dist_mix.clamp(0.0, 1.0);
+            if p.dist_mode == DIST_CRUSH {
+                // Sample-rate divide: hold every Nth sample (~750 Hz at
+                // 48 kHz and full drive).
+                let hold = 1 + (drive * 63.0).round() as u32;
+                for i in 0..n {
+                    if self.decim_counter == 0 {
+                        self.decim_hold = (left[i], right[i]);
+                    }
+                    self.decim_counter = (self.decim_counter + 1) % hold;
+                    left[i] += (self.decim_hold.0 - left[i]) * mix;
+                    right[i] += (self.decim_hold.1 - right[i]) * mix;
+                }
+            } else {
+                for i in 0..n {
+                    let y_l = distort(p.dist_mode, left[i] * gain) * comp;
+                    let y_r = distort(p.dist_mode, right[i] * gain) * comp;
+                    left[i] += (y_l - left[i]) * mix;
+                    right[i] += (y_r - right[i]) * mix;
+                }
             }
         }
 
@@ -1030,8 +1352,11 @@ impl SynthEngine {
 /// crossfade fraction should a blended scheme land later). `inc` is cycles
 /// per sample of the center voice.
 fn mip_for_increment(inc: f32, p: &OscParams) -> (usize, f32) {
-    // Worst-case unison ratio pushes the pitch up by the full spread.
-    let worst = inc * (p.uni_detune * UNISON_SPREAD_CENTS / 1200.0).exp2();
+    // Worst-case unison ratio pushes the pitch up by the full spread, and
+    // a hot warp widens the spectrum by a few more octaves.
+    let worst = inc
+        * (p.uni_detune * UNISON_SPREAD_CENTS / 1200.0).exp2()
+        * warp_octaves(p.warp_mode, p.warp_amount).exp2();
     if worst <= 0.0 {
         return (0, 0.0);
     }
@@ -1219,6 +1544,338 @@ mod tests {
         assert!(
             wide > mono * 4.0,
             "8-voice unison should be far wider: mono={mono} wide={wide}"
+        );
+    }
+
+    /// Goertzel power at `freq` Hz over `buf` at 48 kHz.
+    fn goertzel(buf: &[f32], freq: f64) -> f64 {
+        let w = core::f64::consts::TAU * freq / 48_000.0;
+        let coeff = 2.0 * w.cos();
+        let (mut s1, mut s2) = (0.0f64, 0.0f64);
+        for &x in buf {
+            let s0 = x as f64 + coeff * s1 - s2;
+            s2 = s1;
+            s1 = s0;
+        }
+        let re = s1 - s2 * w.cos();
+        let im = s2 * w.sin();
+        re * re + im * im
+    }
+
+    #[test]
+    fn warp_modes_stay_finite() {
+        for mode in 0..WARP_MODE_COUNT as u8 {
+            for amount in [0.3f32, 1.0] {
+                let mut e = engine();
+                let mut p = *e.params();
+                p.osc_a.warp_mode = mode;
+                p.osc_a.warp_amount = amount;
+                p.osc_a.unison = 4;
+                p.osc_b.enable = true;
+                p.osc_b.warp_mode = mode;
+                p.osc_b.warp_amount = amount;
+                e.set_params(p);
+                for k in [24u8, 60, 108] {
+                    e.note_on(k, 1.0);
+                }
+                let (l, r) = render_seconds(&mut e, 0.25);
+                assert!(
+                    l.iter().chain(r.iter()).all(|v| v.is_finite()),
+                    "mode {mode} amount {amount} produced non-finite output"
+                );
+                assert!(peak(&l) < 8.0, "mode {mode} amount {amount} exploded");
+            }
+        }
+    }
+
+    #[test]
+    fn warp_amount_zero_matches_warp_off() {
+        let render = |mode: u8| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.osc_a.warp_mode = mode;
+            p.osc_a.warp_amount = 0.0;
+            p.filter_enable = false;
+            e.set_params(p);
+            e.note_on(48, 1.0);
+            render_seconds(&mut e, 0.1).0
+        };
+        let off = render(W_OFF);
+        for mode in 1..WARP_MODE_COUNT as u8 {
+            assert_eq!(off, render(mode), "mode {mode} at amount 0 must be a no-op");
+        }
+    }
+
+    #[test]
+    fn warp_biases_the_mip_choice_down() {
+        let mut p = OscParams::default_with(true);
+        p.uni_detune = 0.0;
+        let inc = 440.0 / 48_000.0;
+        let base = mip_for_increment(inc, &p);
+        p.warp_mode = W_SYNC;
+        p.warp_amount = 1.0;
+        let synced = mip_for_increment(inc, &p);
+        assert!(
+            synced.0 >= base.0 + 3,
+            "full sync spans 3 octaves: base {} synced {}",
+            base.0,
+            synced.0
+        );
+    }
+
+    #[test]
+    fn sync_warp_does_not_alias() {
+        // Sync at r=2 is exact transposition (the table is periodic across
+        // the wrap), so the mip bias must keep it strictly alias-free even
+        // at a very high note: no energy where the folded 2nd harmonic of
+        // the doubled pitch would land.
+        let mut e = engine();
+        let mut p = *e.params();
+        p.osc_a.wt_pos = 0.5; // saw region
+        p.osc_a.uni_detune = 0.0;
+        p.osc_a.warp_mode = W_SYNC;
+        p.osc_a.warp_amount = 1.0 / 7.0; // r = 2 exactly
+        p.filter_enable = false;
+        p.env1.attack_s = 0.0;
+        e.set_params(p);
+        e.note_on(120, 1.0); // f0 ≈ 8372 Hz → warped pitch ≈ 16744 Hz
+        let frames = 8192;
+        let mut l = vec![0.0f32; frames];
+        let mut r = vec![0.0f32; frames];
+        e.render(&mut l, &mut r);
+        e.render(&mut l, &mut r);
+        let f0 = 2.0 * 440.0 * ((120.0f64 - 69.0) / 12.0).exp2();
+        let fundamental = goertzel(&l, f0);
+        let alias = goertzel(&l, 48_000.0 - 2.0 * f0);
+        assert!(fundamental > 0.0);
+        assert!(
+            alias < fundamental * 0.05,
+            "sync alias/fund = {}",
+            alias / fundamental
+        );
+    }
+
+    #[test]
+    fn fm_warp_needs_an_enabled_modulator() {
+        let render = |b_enable: bool, amount: f32| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.osc_a.warp_mode = W_FM;
+            p.osc_a.warp_amount = amount;
+            p.osc_a.rand_phase = 0.0;
+            p.osc_b.enable = b_enable;
+            p.osc_b.level = 0.0; // silent, but the pre-gain tap still works
+            p.osc_b.rand_phase = 0.0;
+            p.filter_enable = false;
+            e.set_params(p);
+            e.note_on(48, 1.0);
+            render_seconds(&mut e, 0.1).0
+        };
+        // A silent-but-enabled osc B drives FM…
+        let flat = render(true, 0.0);
+        let modulated = render(true, 0.8);
+        let diff: f32 =
+            flat.iter().zip(&modulated).map(|(a, b)| (a - b).abs()).sum::<f32>() / flat.len() as f32;
+        assert!(diff > 1.0e-4, "FM from a silent osc B must alter the signal");
+        // …while a disabled osc B leaves the tap at zero (no-op).
+        assert_eq!(render(false, 0.0), render(false, 0.8));
+    }
+
+    #[test]
+    fn comb_filter_bounded_at_max_feedback() {
+        let mut e = engine();
+        let mut p = *e.params();
+        p.filter_type = FT_COMB_P;
+        p.cutoff_hz = 220.0;
+        p.resonance = 1.0;
+        e.set_params(p);
+        e.note_on(45, 1.0);
+        let (l, r) = render_seconds(&mut e, 2.0);
+        assert!(l.iter().chain(r.iter()).all(|v| v.is_finite()));
+        assert!(peak(&l) < 4.0, "comb must stay bounded at max feedback");
+    }
+
+    #[test]
+    fn comb_boosts_its_tuned_frequency() {
+        // A 110 Hz saw through a comb tuned to 220 Hz: the 220 Hz partial
+        // is reinforced while 110 Hz sits in a feedback null, so the
+        // 110:220 power ratio must collapse vs the unfiltered render.
+        let ratio_with_filter = |enable: bool| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.osc_a.wt_pos = 0.5; // saw region
+            p.filter_enable = enable;
+            p.filter_type = FT_COMB_P;
+            p.cutoff_hz = 220.0;
+            p.resonance = 0.7;
+            p.env1.attack_s = 0.0;
+            e.set_params(p);
+            e.note_on(45, 1.0); // A2 = 110 Hz
+            let frames = 16_384;
+            let mut l = vec![0.0f32; frames];
+            let mut r = vec![0.0f32; frames];
+            e.render(&mut l, &mut r);
+            e.render(&mut l, &mut r);
+            goertzel(&l, 110.0) / goertzel(&l, 220.0).max(1.0e-12)
+        };
+        let dry = ratio_with_filter(false);
+        let combed = ratio_with_filter(true);
+        assert!(
+            combed < dry * 0.5,
+            "comb must favor 220 Hz over 110 Hz: dry={dry} combed={combed}"
+        );
+    }
+
+    #[test]
+    fn notch_removes_the_cutoff_band() {
+        let energy_at = |enable: bool| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.osc_a.wt_pos = 0.5;
+            p.filter_enable = enable;
+            p.filter_type = FT_NOTCH12;
+            p.cutoff_hz = 440.0;
+            p.resonance = 0.8; // narrow notch
+            p.env1.attack_s = 0.0;
+            e.set_params(p);
+            e.note_on(45, 1.0); // 110 Hz — h4 sits on the notch
+            let frames = 16_384;
+            let mut l = vec![0.0f32; frames];
+            let mut r = vec![0.0f32; frames];
+            e.render(&mut l, &mut r);
+            e.render(&mut l, &mut r);
+            (goertzel(&l, 440.0), goertzel(&l, 110.0))
+        };
+        let (dry_notched, dry_fund) = energy_at(false);
+        let (wet_notched, wet_fund) = energy_at(true);
+        assert!(
+            wet_notched < dry_notched * 0.1,
+            "notch must cut 440 Hz: {wet_notched} vs {dry_notched}"
+        );
+        assert!(
+            wet_fund > dry_fund * 0.3,
+            "notch must pass the fundamental: {wet_fund} vs {dry_fund}"
+        );
+    }
+
+    #[test]
+    fn formant_filter_shapes_vowel_peaks() {
+        // Cutoff 200 Hz → vowel "a" (F1 = 730 Hz). A 55 Hz saw's partial
+        // near F1 (h13 ≈ 715 Hz) must tower over one far above F3
+        // (h90 ≈ 4950 Hz) much more than in the dry signal.
+        let ratio = |enable: bool| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.osc_a.wt_pos = 0.5;
+            p.filter_enable = enable;
+            p.filter_type = FT_FORMANT;
+            p.cutoff_hz = 200.0;
+            p.resonance = 0.5;
+            p.env1.attack_s = 0.0;
+            e.set_params(p);
+            e.note_on(33, 1.0); // A1 = 55 Hz
+            let frames = 16_384;
+            let mut l = vec![0.0f32; frames];
+            let mut r = vec![0.0f32; frames];
+            e.render(&mut l, &mut r);
+            e.render(&mut l, &mut r);
+            goertzel(&l, 55.0 * 13.0) / goertzel(&l, 55.0 * 90.0).max(1.0e-12)
+        };
+        let dry = ratio(false);
+        let wet = ratio(true);
+        assert!(
+            wet > dry * 10.0,
+            "formant must emphasize F1 over the far band: dry={dry} wet={wet}"
+        );
+    }
+
+    #[test]
+    fn distortion_modes_are_finite_and_bounded() {
+        for mode in 0..DIST_MODE_COUNT as u8 {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.dist_enable = true;
+            p.dist_mode = mode;
+            p.dist_drive = 1.0;
+            p.osc_a.unison = 8;
+            p.osc_b.enable = true;
+            e.set_params(p);
+            for k in [24u8, 60, 96] {
+                e.note_on(k, 1.0);
+            }
+            let (l, r) = render_seconds(&mut e, 0.25);
+            assert!(l.iter().chain(r.iter()).all(|v| v.is_finite()));
+            assert!(peak(&l) < 4.0, "dist mode {mode} must stay bounded");
+        }
+    }
+
+    #[test]
+    fn distortion_mix_zero_is_transparent() {
+        let render = |enable: bool| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.dist_enable = enable;
+            p.dist_mode = DIST_FOLD;
+            p.dist_drive = 1.0;
+            p.dist_mix = 0.0;
+            e.set_params(p);
+            e.note_on(48, 1.0);
+            render_seconds(&mut e, 0.1).0
+        };
+        assert_eq!(render(false), render(true));
+    }
+
+    #[test]
+    fn crush_holds_samples() {
+        let mut e = engine();
+        let mut p = *e.params();
+        p.dist_enable = true;
+        p.dist_mode = DIST_CRUSH;
+        p.dist_drive = 1.0; // hold = 64 samples
+        e.set_params(p);
+        e.note_on(48, 1.0);
+        // Let the master-gain smoothing settle, then inspect a window.
+        let _ = render_seconds(&mut e, 0.3);
+        let (l, _r) = render_seconds(&mut e, 0.1);
+        let equal_pairs = l.windows(2).filter(|w| w[0] == w[1]).count();
+        assert!(
+            equal_pairs as f32 > l.len() as f32 * 0.9,
+            "crush must hold samples: {} / {}",
+            equal_pairs,
+            l.len()
+        );
+    }
+
+    #[test]
+    fn detune_mod_dest_widens_stereo() {
+        let stereo_diff = |amount: f32| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.osc_a.unison = 8;
+            p.osc_a.uni_detune = 0.0;
+            p.filter_enable = false;
+            p.mods[0] = ModSlot {
+                source: SRC_VELOCITY as u8,
+                dest: DST_A_UNI_DET as u8,
+                amount,
+            };
+            e.set_params(p);
+            e.note_on(48, 1.0);
+            let frames = 24_000;
+            let mut l = vec![0.0f32; frames];
+            let mut r = vec![0.0f32; frames];
+            e.render(&mut l, &mut r);
+            l.iter()
+                .zip(&r)
+                .map(|(a, b)| (a - b).abs() as f64)
+                .sum::<f64>()
+                / frames as f64
+        };
+        let flat = stereo_diff(0.0);
+        let wide = stereo_diff(0.8);
+        assert!(
+            wide > flat * 4.0,
+            "detune modulation should widen the image: flat={flat} wide={wide}"
         );
     }
 

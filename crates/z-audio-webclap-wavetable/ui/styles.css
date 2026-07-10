@@ -712,7 +712,44 @@ main {
 .bottom-row {
   display: grid;
   gap: 8px;
-  grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 2fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+}
+
+/* -- warp / preset selects, distortion panel ----------------------------------- */
+
+.warp-pick select,
+.preset-pick select {
+  appearance: none;
+  background: #0c1218;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text-mid);
+  font-size: 10px;
+  max-width: 110px;
+  min-width: 0;
+  padding: 3px 6px;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.warp-pick select:hover,
+.preset-pick select:hover {
+  border-color: var(--line-strong);
+}
+
+.warp-pick select.engaged {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  color: color-mix(in srgb, var(--accent) 60%, #fff);
+}
+
+#sec-dist .segmented button {
+  font-size: 9px;
+  letter-spacing: 0;
+  padding: 3px 1px;
+}
+
+#dist-knobs {
+  justify-items: center;
+  margin-top: 6px;
 }
 
 /* -- preview keyboard ---------------------------------------------------------- */
@@ -808,6 +845,17 @@ main {
   font-size: 9px;
   letter-spacing: 0;
   padding: 3px 1px;
+}
+
+/* 8 filter types have to fit in the panel head */
+#filter-type .segmented {
+  gap: 2px;
+}
+
+#filter-type .segmented button {
+  font-size: 8px;
+  min-width: 26px;
+  padding: 3px 0;
 }
 
 /* -- Serum-style mod assignment ------------------------------------------- */
