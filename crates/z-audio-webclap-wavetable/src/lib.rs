@@ -585,44 +585,145 @@ mod tests {
         assert!(!p.dist_enable);
     }
 
-    /// The "Vowel Growl" factory preset as shipped in ui/main.js — this
-    /// mirror guards the JS id numbers against drift in the Rust surface.
-    const VOWEL_GROWL: &[(u32, f64)] = &[
-        (511, 5.0),  // A Table = Growl
-        (512, 0.3),  // A WT Pos
-        (513, -1.0), // A Octave
-        (516, 5.0),  // A Unison
-        (517, 0.18), // A Uni Detune
-        (551, 7.0),  // Filter Type = Formant
-        (552, 900.0),
-        (553, 0.5),
-        (571, 4.5), // LFO1 Rate
-        (580, 2.0),
-        (581, 9.0),
-        (582, 0.6), // LFO1 → Cutoff
-        (583, 2.0),
-        (584, 1.0),
-        (585, 0.35), // LFO1 → A WT Pos
-        (604, 1.0),
-        (605, 0.0),
-        (606, 0.45),
-        (607, 0.8),
-    ];
+    /// The factory preset bank, parsed straight from the shipped UI file
+    /// so the JS ids can never drift from the Rust param surface.
+    const PRESETS_JS: &str = include_str!("../ui/presets.js");
+
+    /// Hand-rolled scanner honoring the FORMAT CONTRACT documented at the
+    /// top of ui/presets.js: pairs are `NNN: <number>` inside `set: {...}`
+    /// blocks (which may span lines but contain no nested braces).
+    fn scan_presets(src: &str) -> Vec<Vec<(u32, f64)>> {
+        let mut presets = Vec::new();
+        let mut current: Option<Vec<(u32, f64)>> = None;
+        for raw in src.lines() {
+            let mut rest = raw.split("//").next().unwrap();
+            loop {
+                if current.is_none() {
+                    match rest.find("set:") {
+                        Some(at) => {
+                            current = Some(Vec::new());
+                            rest = &rest[at + 4..];
+                        }
+                        None => break,
+                    }
+                }
+                // Inside a set block: consume `NNN: value` pairs until `}`.
+                let bytes = rest.as_bytes();
+                let mut i = 0;
+                let mut closed_at = None;
+                while i < bytes.len() {
+                    if bytes[i] == b'}' {
+                        closed_at = Some(i);
+                        break;
+                    }
+                    if i + 3 < bytes.len()
+                        && bytes[i].is_ascii_digit()
+                        && bytes[i + 1].is_ascii_digit()
+                        && bytes[i + 2].is_ascii_digit()
+                        && bytes[i + 3] == b':'
+                    {
+                        let id: u32 = rest[i..i + 3].parse().unwrap();
+                        let tail = &rest[i + 4..];
+                        let trimmed = tail.trim_start();
+                        let end = trimmed
+                            .find([',', '}', ' '])
+                            .unwrap_or(trimmed.len());
+                        let literal = &trimmed[..end];
+                        let value: f64 = literal.parse().unwrap_or_else(|_| {
+                            panic!("preset id {id}: unparseable value {literal:?}")
+                        });
+                        current.as_mut().unwrap().push((id, value));
+                        i += 4 + (tail.len() - trimmed.len()) + end;
+                    } else {
+                        i += 1;
+                    }
+                }
+                match closed_at {
+                    Some(at) => {
+                        presets.push(current.take().unwrap());
+                        rest = &rest[at + 1..];
+                    }
+                    None => break, // set continues on the next line
+                }
+            }
+        }
+        presets
+    }
 
     #[test]
-    fn preset_snapshot_applies_and_round_trips() {
-        let mut p = SynthParams::default();
-        for &(id, v) in VOWEL_GROWL {
-            apply_param(&mut p, id, v);
-            assert!(
-                (param_value(&p, id) - v).abs() < 1.0e-4,
-                "preset id {id} value {v} did not round-trip"
-            );
+    fn factory_presets_are_valid() {
+        let presets = scan_presets(PRESETS_JS);
+        assert_eq!(presets.len(), 60, "expected 60 factory presets");
+        let pairs: usize = presets.iter().map(|p| p.len()).sum();
+        assert!(pairs >= 400, "scanner found too few pairs ({pairs})");
+
+        let defs: std::collections::HashMap<u32, _> =
+            param_defs().into_iter().map(|d| (d.id, d)).collect();
+        for (pi, preset) in presets.iter().enumerate() {
+            let mut p = SynthParams::default();
+            for &(id, v) in preset {
+                let def = defs
+                    .get(&id)
+                    .unwrap_or_else(|| panic!("preset {pi}: unknown param id {id}"));
+                assert!(
+                    v >= def.min && v <= def.max,
+                    "preset {pi}: id {id} value {v} outside [{}, {}]",
+                    def.min,
+                    def.max
+                );
+                if def.flags & wclap_plugin::PARAM_IS_STEPPED != 0 {
+                    assert!(
+                        v.fract() == 0.0,
+                        "preset {pi}: stepped id {id} has fractional value {v}"
+                    );
+                }
+                apply_param(&mut p, id, v);
+                assert!(
+                    (param_value(&p, id) - v).abs() < 1.0e-4,
+                    "preset {pi}: id {id} value {v} did not round-trip"
+                );
+            }
         }
-        assert_eq!(p.osc_a.table, 5);
-        assert_eq!(p.filter_type, 7);
-        assert!(p.dist_enable);
-        assert_eq!(p.mods[0].dest as usize, DST_CUTOFF);
+
+        // Coverage: the bank must exercise the whole factory palette.
+        let collect = |ids: &[u32]| -> std::collections::HashSet<i64> {
+            presets
+                .iter()
+                .flatten()
+                .filter(|(id, _)| ids.contains(id))
+                .map(|&(_, v)| v as i64)
+                .collect()
+        };
+        let tables = collect(&[
+            OSC_A_BASE + OSC_TABLE,
+            OSC_B_BASE + OSC_TABLE,
+        ]);
+        for t in 0..wavetable::TABLE_COUNT as i64 {
+            assert!(tables.contains(&t), "no preset uses table {t}");
+        }
+        let warps = collect(&[
+            OSC_A_BASE + OSC_WARP_MODE,
+            OSC_B_BASE + OSC_WARP_MODE,
+        ]);
+        for w in 1..WARP_MODE_COUNT as i64 {
+            assert!(warps.contains(&w), "no preset uses warp mode {w}");
+        }
+        let filters = collect(&[P_FILTER_TYPE]);
+        for f in 0..FILTER_TYPE_COUNT as i64 {
+            assert!(filters.contains(&f), "no preset uses filter type {f}");
+        }
+        let dists = collect(&[P_DIST_MODE]);
+        for d in 0..DIST_MODE_COUNT as i64 {
+            assert!(dists.contains(&d), "no preset uses dist mode {d}");
+        }
+        let sources = collect(&[
+            MOD_BASE + MOD_SOURCE,
+            MOD_BASE + 3 + MOD_SOURCE,
+            MOD_BASE + 6 + MOD_SOURCE,
+        ]);
+        for s in 1..SRC_COUNT as i64 {
+            assert!(sources.contains(&s), "no preset uses mod source {s}");
+        }
     }
 
     #[test]

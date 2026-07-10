@@ -14,6 +14,7 @@
 "use strict";
 
 import { connect, fmt, clamp, setupCanvas, markConnected } from "./zui.js";
+import { PRESET_GROUPS } from "./presets.js";
 
 // --- Parameter ids (mirror crates/z-audio-webclap-wavetable/src/params.rs) --
 
@@ -70,6 +71,8 @@ const P = {
   DIST_MIX: 607,
 };
 
+// Mirror of src/wavetable.rs table_name() — order and spelling must match
+// (guarded by the Rust test `ui_table_names_match_rust`).
 const TABLE_NAMES = [
   "Basic Shapes",
   "PWM",
@@ -80,6 +83,29 @@ const TABLE_NAMES = [
   "FM Growl",
   "Sync Saw",
   "Digital Grit",
+  "Octave Stack",
+  "Soft Square",
+  "Tri Fold",
+  "Pulse Train",
+  "Choir Ahh",
+  "Vowel Talk",
+  "Throat",
+  "Bit Steps",
+  "Sync Square",
+  "VOSIM",
+  "FM Bell",
+  "FM Bass",
+  "FM Fold",
+  "Glass",
+  "Gamelan",
+  "Drawbars",
+  "Even/Odd",
+  "Pipe Organ",
+  "String Machine",
+  "Pluck String",
+  "Breath",
+  "Spectral Noise",
+  "Solid Sub",
 ];
 const WARP_MODES = [
   "Warp Off",
@@ -662,14 +688,17 @@ function makeTablePicker(def) {
   prev.textContent = "‹";
   const name = document.createElement("span");
   name.className = "table-name";
+  const index = document.createElement("span");
+  index.className = "table-index";
   const next = document.createElement("button");
   next.type = "button";
   next.textContent = "›";
-  root.append(prev, name, next);
+  root.append(prev, name, index, next);
 
   let value = def.default;
   const render = () => {
     name.textContent = def.options[Math.round(value)] || "?";
+    index.textContent = `${Math.round(value) + 1}/${def.options.length}`;
   };
   const bump = (dir) => {
     value = (Math.round(value) + dir + def.options.length) % def.options.length;
@@ -862,65 +891,12 @@ for (const def of [
 
 // --- Factory presets ------------------------------------------------------------
 //
-// Each preset is a diff against Init (every registered param back at its
-// default), so the maps stay valid as the parameter surface grows. The
-// "Vowel Growl" map is mirrored in src/lib.rs tests to guard id drift.
+// The preset bank lives in presets.js (validated against the Rust param
+// surface by the `factory_presets_are_valid` test). Each preset is a diff
+// against Init: applying one resets every registered param to its default
+// first, then overlays the map.
 
-const PRESETS = [
-  { name: "Init", set: {} },
-  {
-    // Growl table through the formant filter, LFO1 sweeping the vowel.
-    name: "Vowel Growl",
-    set: {
-      511: 5, 512: 0.3, 513: -1, 516: 5, 517: 0.18,
-      551: 7, 552: 900, 553: 0.5,
-      571: 4.5,
-      580: 2, 581: 9, 582: 0.6,
-      583: 2, 584: 1, 585: 0.35,
-      604: 1, 605: 0, 606: 0.45, 607: 0.8,
-    },
-  },
-  {
-    // FM Growl table, osc B as a silent FM modulator two octaves down,
-    // Env2 kicks the FM depth per note, LFO2 talks through the formants.
-    name: "FM Talk Bass",
-    set: {
-      511: 6, 512: 0.4, 513: -1, 523: 7, 524: 0.5,
-      530: 1, 533: -2, 542: 0,
-      551: 7, 552: 600, 553: 0.4,
-      566: 0.35, 567: 0.2,
-      575: 6,
-      580: 3, 581: 9, 582: 0.5,
-      583: 1, 584: 12, 585: 0.6,
-      586: 3, 587: 1, 588: 0.3,
-      604: 1, 605: 0, 606: 0.35, 607: 1,
-    },
-  },
-  {
-    // Detuned sync-saw stack over a growl layer, dark LP24, fold dist.
-    name: "Reese Sync",
-    set: {
-      511: 7, 512: 0.25, 513: -1, 516: 7, 517: 0.35, 518: 0.9,
-      523: 3, 524: 0.3,
-      530: 1, 531: 5, 532: 0.2, 533: -1, 535: 12, 542: 0.55,
-      551: 1, 552: 400, 553: 0.25,
-      571: 0.8,
-      580: 2, 581: 9, 582: 0.4,
-      604: 1, 605: 2, 606: 0.5, 607: 0.7,
-    },
-  },
-  {
-    // Digital Grit through a key-tracked comb, morph wobble, hard clip.
-    name: "Grit Comb",
-    set: {
-      511: 8, 512: 0.5, 513: -1,
-      551: 5, 552: 110, 553: 0.6, 555: 1,
-      571: 3,
-      580: 2, 581: 1, 582: 0.5,
-      604: 1, 605: 1, 606: 0.4, 607: 0.85,
-    },
-  },
-];
+const PRESETS = PRESET_GROUPS.flatMap((group) => group.presets);
 
 function applyPreset(index) {
   const preset = PRESETS[index];
@@ -931,7 +907,16 @@ function applyPreset(index) {
 
 {
   const select = document.createElement("select");
-  for (const [i, p] of PRESETS.entries()) select.add(new Option(p.name, i));
+  let index = 0;
+  for (const group of PRESET_GROUPS) {
+    const bucket = document.createElement("optgroup");
+    bucket.label = group.name;
+    for (const preset of group.presets) {
+      bucket.append(new Option(preset.name, index));
+      index += 1;
+    }
+    select.append(bucket);
+  }
   select.addEventListener("change", () => applyPreset(Number(select.value)));
   $id("preset-mount").append(select);
 }

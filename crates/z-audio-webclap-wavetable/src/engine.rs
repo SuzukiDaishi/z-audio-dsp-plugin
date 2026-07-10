@@ -747,7 +747,7 @@ struct ModOffsets {
 
 pub struct SynthEngine {
     params: SynthParams,
-    tables: WavetableSet,
+    tables: std::sync::Arc<WavetableSet>,
     voices: Vec<Voice>,
     sample_rate: f32,
     inv_sample_rate: f32,

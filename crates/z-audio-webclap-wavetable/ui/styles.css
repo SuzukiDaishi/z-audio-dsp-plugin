@@ -717,6 +717,12 @@ main {
 
 /* -- warp / preset selects, distortion panel ----------------------------------- */
 
+.table-index {
+  color: var(--text-dim);
+  font-size: 8px;
+  white-space: nowrap;
+}
+
 .warp-pick select,
 .preset-pick select {
   appearance: none;
