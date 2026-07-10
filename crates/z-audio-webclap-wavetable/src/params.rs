@@ -6,8 +6,10 @@
 //!
 //! Layout: 500s globals, 510s OSC A, 530s OSC B, 550s filter, 560s
 //! envelopes, 570s LFOs, 580-603 the 8×3 mod matrix, 604-607 the
-//! global distortion. Ids are append-only: saved states replay every
-//! id through `set_param`, so renumbering 500-603 breaks old projects.
+//! global distortion, 608-611 env delay/hold, 612-615 LFO fade/one-shot,
+//! 616-618 velocity/note source shaping, 620-625 the two Random
+//! modulators (619 reserved). Ids are append-only: saved states replay
+//! every id through `set_param`, so renumbering breaks old projects.
 
 use wclap_plugin::{ParamDef, PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED};
 
@@ -105,6 +107,43 @@ pub const LFO_RATE: u32 = 1;
 pub const LFO_PHASE: u32 = 2;
 pub const LFO_RETRIG: u32 = 3;
 pub const LFO_FIELDS: u32 = 4;
+/// LFO waves, in stepped order: sine, tri, saw up, square, S&H, ramp
+/// down, pulse 25%, smooth S&H. 0-4 predate the modulation expansion.
+pub const LFO_WAVE_COUNT: usize = 8;
+
+/// Envelope Delay/Hold extension (the 560s blocks are full, so these
+/// live in the append-only 608+ range).
+pub const P_ENV1_DELAY: u32 = 608;
+pub const P_ENV1_HOLD: u32 = 609;
+pub const P_ENV2_DELAY: u32 = 610;
+pub const P_ENV2_HOLD: u32 = 611;
+
+/// LFO fade-in / one-shot extension (570s blocks are full too).
+pub const P_LFO1_FADE: u32 = 612;
+pub const P_LFO1_ONESHOT: u32 = 613;
+pub const P_LFO2_FADE: u32 = 614;
+pub const P_LFO2_ONESHOT: u32 = 615;
+
+/// Velocity / Note mod-source shaping (Serum-style source tiles).
+pub const P_VEL_CURVE: u32 = 616;
+pub const P_NOTE_CENTER: u32 = 617;
+pub const P_NOTE_RANGE: u32 = 618;
+
+/// Random modulators (Vital-style), field offsets from the block base
+/// (RND1=620, RND2=623; 619 reserved as a block separator).
+pub const RND1_BASE: u32 = 620;
+pub const RND2_BASE: u32 = 623;
+pub const RND_MODE: u32 = 0;
+pub const RND_RATE: u32 = 1;
+pub const RND_RETRIG: u32 = 2;
+pub const RND_FIELDS: u32 = 3;
+
+/// Random modes, in stepped order.
+pub const RND_SH: u8 = 0;
+pub const RND_SMOOTH: u8 = 1;
+pub const RND_DRIFT: u8 = 2;
+pub const RND_CHAOS: u8 = 3;
+pub const RND_MODE_COUNT: usize = 4;
 
 /// Mod matrix: 8 slots × (source, dest, amount) starting at 580.
 pub const MOD_BASE: u32 = 580;
@@ -114,8 +153,9 @@ pub const MOD_DEST: u32 = 1;
 pub const MOD_AMOUNT: u32 = 2;
 pub const MOD_FIELDS: u32 = 3;
 
-/// Mod sources, in stepped-parameter order. Env 1 (the amp envelope) was
-/// appended after the original set so existing presets keep their meaning.
+/// Mod sources, in stepped-parameter order. Env 1 (the amp envelope) and
+/// the two Random modulators were appended after the original set so
+/// existing presets keep their meaning.
 pub const SRC_NONE: usize = 0;
 pub const SRC_ENV2: usize = 1;
 pub const SRC_LFO1: usize = 2;
@@ -123,7 +163,9 @@ pub const SRC_LFO2: usize = 3;
 pub const SRC_VELOCITY: usize = 4;
 pub const SRC_NOTE: usize = 5;
 pub const SRC_ENV1: usize = 6;
-pub const SRC_COUNT: usize = 7;
+pub const SRC_RND1: usize = 7;
+pub const SRC_RND2: usize = 8;
+pub const SRC_COUNT: usize = 9;
 
 /// Mod destinations, in stepped-parameter order.
 pub const DST_NONE: usize = 0;
@@ -273,7 +315,14 @@ fn lfo_defs(defs: &mut Vec<ParamDef>, base: u32) {
             b"LFO2 Retrig\0",
         ]
     };
-    defs.push(def(base + LFO_WAVE, names[0], 0.0, 4.0, 0.0, true));
+    defs.push(def(
+        base + LFO_WAVE,
+        names[0],
+        0.0,
+        (LFO_WAVE_COUNT - 1) as f64,
+        0.0,
+        true,
+    ));
     // 50 Hz ceiling: fast growl wobble territory (no host tempo sync in
     // the WebCLAP scaffold, so raw rate is the only option).
     defs.push(def(base + LFO_RATE, names[1], 0.01, 50.0, 2.0, false));
@@ -370,6 +419,36 @@ pub fn param_defs() -> Vec<ParamDef> {
     ));
     defs.push(def(P_DIST_DRIVE, b"Dist Drive\0", 0.0, 1.0, 0.3, false));
     defs.push(def(P_DIST_MIX, b"Dist Mix\0", 0.0, 1.0, 1.0, false));
+
+    defs.push(def(P_ENV1_DELAY, b"Env1 Delay\0", 0.0, 2.0, 0.0, false));
+    defs.push(def(P_ENV1_HOLD, b"Env1 Hold\0", 0.0, 2.0, 0.0, false));
+    defs.push(def(P_ENV2_DELAY, b"Env2 Delay\0", 0.0, 2.0, 0.0, false));
+    defs.push(def(P_ENV2_HOLD, b"Env2 Hold\0", 0.0, 2.0, 0.0, false));
+    defs.push(def(P_LFO1_FADE, b"LFO1 Fade\0", 0.0, 5.0, 0.0, false));
+    defs.push(def(P_LFO1_ONESHOT, b"LFO1 OneShot\0", 0.0, 1.0, 0.0, true));
+    defs.push(def(P_LFO2_FADE, b"LFO2 Fade\0", 0.0, 5.0, 0.0, false));
+    defs.push(def(P_LFO2_ONESHOT, b"LFO2 OneShot\0", 0.0, 1.0, 0.0, true));
+    defs.push(def(P_VEL_CURVE, b"Vel Curve\0", -1.0, 1.0, 0.0, false));
+    defs.push(def(P_NOTE_CENTER, b"Note Center\0", 0.0, 127.0, 60.0, true));
+    defs.push(def(P_NOTE_RANGE, b"Note Range\0", 1.0, 64.0, 32.0, true));
+
+    const RND_NAMES: [[&[u8]; 3]; 2] = [
+        [b"Rnd1 Mode\0", b"Rnd1 Rate\0", b"Rnd1 Retrig\0"],
+        [b"Rnd2 Mode\0", b"Rnd2 Rate\0", b"Rnd2 Retrig\0"],
+    ];
+    for (i, base) in [RND1_BASE, RND2_BASE].into_iter().enumerate() {
+        let names = &RND_NAMES[i];
+        defs.push(def(
+            base + RND_MODE,
+            names[0],
+            0.0,
+            (RND_MODE_COUNT - 1) as f64,
+            0.0,
+            true,
+        ));
+        defs.push(def(base + RND_RATE, names[1], 0.01, 50.0, 2.0, false));
+        defs.push(def(base + RND_RETRIG, names[2], 0.0, 1.0, 1.0, true));
+    }
     defs
 }
 
@@ -380,10 +459,13 @@ mod tests {
     #[test]
     fn id_blocks_are_well_formed() {
         let defs = param_defs();
-        assert_eq!(defs.len(), 4 + 15 * 2 + 9 + 5 * 2 + 4 * 2 + 24 + 4);
+        assert_eq!(
+            defs.len(),
+            4 + 15 * 2 + 9 + 5 * 2 + 4 * 2 + 24 + 4 + 4 + 4 + 3 + 3 * 2
+        );
         let mut seen = std::collections::HashSet::new();
         for def in &defs {
-            assert!((500..=607).contains(&def.id), "id {} out of block", def.id);
+            assert!((500..=625).contains(&def.id), "id {} out of block", def.id);
             assert!(seen.insert(def.id), "duplicate id {}", def.id);
             assert!(def.min < def.max);
             assert!(def.default >= def.min && def.default <= def.max);

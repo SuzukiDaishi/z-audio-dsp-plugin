@@ -95,6 +95,31 @@ pub fn param_value(p: &SynthParams, id: u32) -> f64 {
         P_DIST_MODE => p.dist_mode as f32,
         P_DIST_DRIVE => p.dist_drive,
         P_DIST_MIX => p.dist_mix,
+        P_ENV1_DELAY => p.env1.delay_s,
+        P_ENV1_HOLD => p.env1.hold_s,
+        P_ENV2_DELAY => p.env2.delay_s,
+        P_ENV2_HOLD => p.env2.hold_s,
+        P_LFO1_FADE => p.lfo1.fade_s,
+        P_LFO1_ONESHOT => p.lfo1.one_shot as u8 as f32,
+        P_LFO2_FADE => p.lfo2.fade_s,
+        P_LFO2_ONESHOT => p.lfo2.one_shot as u8 as f32,
+        P_VEL_CURVE => p.vel_curve,
+        P_NOTE_CENTER => p.note_center as f32,
+        P_NOTE_RANGE => p.note_range as f32,
+        id if (RND1_BASE..RND1_BASE + RND_FIELDS).contains(&id)
+            || (RND2_BASE..RND2_BASE + RND_FIELDS).contains(&id) =>
+        {
+            let (base, r) = if id >= RND2_BASE {
+                (RND2_BASE, &p.rnd2)
+            } else {
+                (RND1_BASE, &p.rnd1)
+            };
+            match id - base {
+                RND_MODE => r.mode as f32,
+                RND_RATE => r.rate_hz,
+                _ => r.retrig as u8 as f32,
+            }
+        }
         id if (OSC_A_BASE..OSC_A_BASE + OSC_FIELDS).contains(&id)
             || (OSC_B_BASE..OSC_B_BASE + OSC_FIELDS).contains(&id) =>
         {
@@ -192,6 +217,31 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
         P_DIST_MODE => p.dist_mode = v.clamp(0.0, (DIST_MODE_COUNT - 1) as f32).round() as u8,
         P_DIST_DRIVE => p.dist_drive = v.clamp(0.0, 1.0),
         P_DIST_MIX => p.dist_mix = v.clamp(0.0, 1.0),
+        P_ENV1_DELAY => p.env1.delay_s = v.clamp(0.0, 2.0),
+        P_ENV1_HOLD => p.env1.hold_s = v.clamp(0.0, 2.0),
+        P_ENV2_DELAY => p.env2.delay_s = v.clamp(0.0, 2.0),
+        P_ENV2_HOLD => p.env2.hold_s = v.clamp(0.0, 2.0),
+        P_LFO1_FADE => p.lfo1.fade_s = v.clamp(0.0, 5.0),
+        P_LFO1_ONESHOT => p.lfo1.one_shot = v >= 0.5,
+        P_LFO2_FADE => p.lfo2.fade_s = v.clamp(0.0, 5.0),
+        P_LFO2_ONESHOT => p.lfo2.one_shot = v >= 0.5,
+        P_VEL_CURVE => p.vel_curve = v.clamp(-1.0, 1.0),
+        P_NOTE_CENTER => p.note_center = v.clamp(0.0, 127.0).round() as u8,
+        P_NOTE_RANGE => p.note_range = v.clamp(1.0, 64.0).round() as u8,
+        id if (RND1_BASE..RND1_BASE + RND_FIELDS).contains(&id)
+            || (RND2_BASE..RND2_BASE + RND_FIELDS).contains(&id) =>
+        {
+            let (base, r) = if id >= RND2_BASE {
+                (RND2_BASE, &mut p.rnd2)
+            } else {
+                (RND1_BASE, &mut p.rnd1)
+            };
+            match id - base {
+                RND_MODE => r.mode = v.clamp(0.0, (RND_MODE_COUNT - 1) as f32).round() as u8,
+                RND_RATE => r.rate_hz = v.clamp(0.01, 50.0),
+                _ => r.retrig = v >= 0.5,
+            }
+        }
         id if (OSC_A_BASE..OSC_A_BASE + OSC_FIELDS).contains(&id)
             || (OSC_B_BASE..OSC_B_BASE + OSC_FIELDS).contains(&id) =>
         {
@@ -262,7 +312,7 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
                 &mut p.lfo2
             };
             match id - base {
-                LFO_WAVE => l.wave = v.clamp(0.0, 4.0).round() as u8,
+                LFO_WAVE => l.wave = v.clamp(0.0, (LFO_WAVE_COUNT - 1) as f32).round() as u8,
                 LFO_RATE => l.rate_hz = v.clamp(0.01, 50.0),
                 LFO_PHASE => l.phase = v.clamp(0.0, 1.0),
                 _ => l.retrig = v >= 0.5,
@@ -337,9 +387,9 @@ impl ZAudioWebWavetable {
     }
 
     fn push_meter(&mut self) {
-        let (env1, env2, lfo1, lfo2) = self.engine.meter();
+        let frame = self.engine.meter();
         let voices = self.engine.active_voices().min(255) as u8;
-        send_to_ui(&encode_meter(voices, env1, env2, lfo1, lfo2));
+        send_to_ui(&encode_meter(voices, &frame));
     }
 }
 
@@ -721,9 +771,21 @@ mod tests {
             MOD_BASE + 3 + MOD_SOURCE,
             MOD_BASE + 6 + MOD_SOURCE,
         ]);
-        for s in 1..SRC_COUNT as i64 {
+        // Pinned to the pre-Random source set (1..=6): the factory bank
+        // predates RND1/RND2; their coverage lands with a future preset
+        // refresh.
+        for s in 1..7 {
             assert!(sources.contains(&s), "no preset uses mod source {s}");
         }
+    }
+
+    #[test]
+    fn lfo_wave_accepts_the_expanded_range() {
+        // Regression: the old clamp silently discarded waves 5-7.
+        let mut p = SynthParams::default();
+        apply_param(&mut p, LFO1_BASE + LFO_WAVE, 7.0);
+        assert_eq!(p.lfo1.wave, 7);
+        assert_eq!(param_value(&p, LFO1_BASE + LFO_WAVE), 7.0);
     }
 
     #[test]

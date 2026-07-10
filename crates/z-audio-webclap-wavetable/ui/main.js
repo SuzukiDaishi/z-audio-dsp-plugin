@@ -65,6 +65,14 @@ const P = {
   MOD_BASE: 580,
   MOD_FIELDS: 3,
   MOD_SLOTS: 8,
+  VEL_CURVE: 616,
+  NOTE_CENTER: 617,
+  NOTE_RANGE: 618,
+  RND1: 620,
+  RND2: 623,
+  RND_MODE: 0,
+  RND_RATE: 1,
+  RND_RETRIG: 2,
   DIST_ENABLE: 604,
   DIST_MODE: 605,
   DIST_DRIVE: 606,
@@ -120,7 +128,12 @@ const WARP_MODES = [
   "AM (other)",
 ];
 const DIST_MODES = ["Tanh", "Hard", "Fold", "Sine", "Crush"];
-const MOD_SOURCES = ["None", "Env 2", "LFO 1", "LFO 2", "Velocity", "Note", "Env 1"];
+const RND_MODES = ["S&H", "Smooth", "Drift", "Chaos"];
+// Absolute ids of the DAHDSR / LFO extensions (the 560s/570s blocks were
+// full, so these live in the append-only 608+ range).
+const ENV_EXTRA = { 560: { delay: 608, hold: 609 }, 565: { delay: 610, hold: 611 } };
+const LFO_EXTRA = { 570: { fade: 612, oneShot: 613 }, 574: { fade: 614, oneShot: 615 } };
+const MOD_SOURCES = ["None", "Env 2", "LFO 1", "LFO 2", "Velocity", "Note", "Env 1", "Rnd 1", "Rnd 2"];
 const MOD_COLORS = [
   "#7e93a3", // none (unused)
   "#ff8a5c", // env 2
@@ -129,6 +142,8 @@ const MOD_COLORS = [
   "#9dffb0", // velocity
   "#ff9bd4", // note
   "#f6c945", // env 1
+  "#5cffc4", // rnd 1
+  "#ffb45c", // rnd 2
 ];
 const MOD_DESTS = [
   "None",
@@ -300,7 +315,7 @@ function clearMod(base) {
   setParam(base + 2, 0);
 }
 
-/** Live source value for ring animation (null for velocity/note). */
+/** Live source value for ring/badge animation. */
 function liveModValue(src) {
   switch (src) {
     case 1:
@@ -309,8 +324,16 @@ function liveModValue(src) {
       return state.lfo1;
     case 3:
       return state.lfo2;
+    case 4:
+      return state.velo;
+    case 5:
+      return state.note;
     case 6:
       return state.env1;
+    case 7:
+      return state.rnd1;
+    case 8:
+      return state.rnd2;
     default:
       return null;
   }
@@ -803,9 +826,12 @@ $id("route-b").append(makeSwitch({ id: P.ROUTE_B, label: "B → Filt", min: 0, m
 
 function buildEnv(base, mountId, sustainDefault) {
   const at = (o) => base + o;
+  const extra = ENV_EXTRA[base];
   const knobs = $id(mountId);
   for (const def of [
+    { id: extra.delay, label: "Del", min: 0, max: 2, default: 0, scale: "pow2", fmt: fmt.s },
     { id: at(P.ATTACK), label: "Atk", min: 0, max: 5, default: 0.005, scale: "pow2", fmt: fmt.s },
+    { id: extra.hold, label: "Hold", min: 0, max: 2, default: 0, scale: "pow2", fmt: fmt.s },
     { id: at(P.DECAY), label: "Dec", min: 0, max: 5, default: 0.2, scale: "pow2", fmt: fmt.s },
     { id: at(P.SUSTAIN), label: "Sus", min: 0, max: 1, default: sustainDefault, fmt: fmt.pct },
     { id: at(P.RELEASE), label: "Rel", min: 0, max: 5, default: 0.15, scale: "pow2", fmt: fmt.s },
@@ -820,15 +846,20 @@ buildEnv(P.ENV2, "env2-knobs", 0.5);
 
 function buildLfo(base, prefix) {
   const at = (o) => base + o;
+  const extra = LFO_EXTRA[base];
   $id(`${prefix}-retrig`).append(
     makeSwitch({ id: at(P.RETRIG), label: "Retrig", min: 0, max: 1, default: 1 }),
   );
+  $id(`${prefix}-oneshot`).append(
+    makeSwitch({ id: extra.oneShot, label: "1-Shot", min: 0, max: 1, default: 0 }),
+  );
+  // 8 waves no longer fit as segmented buttons — a compact select does.
   $id(`${prefix}-wave`).append(
-    makeSegmented({
+    makeSelect({
       id: at(P.WAVE),
-      options: ["Sin", "Tri", "Saw", "Sqr", "S&H"],
+      options: ["Sine", "Triangle", "Saw Up", "Square", "S&H", "Ramp Down", "Pulse 25%", "Smooth S&H"],
       min: 0,
-      max: 4,
+      max: 7,
       default: 0,
     }),
   );
@@ -853,11 +884,173 @@ function buildLfo(base, prefix) {
       fmt: fmt.pct,
       small: true,
     }),
+    makeKnob({
+      id: extra.fade,
+      label: "Fade",
+      min: 0,
+      max: 5,
+      default: 0,
+      scale: "pow2",
+      fmt: fmt.s,
+      small: true,
+    }),
   );
 }
 
 buildLfo(P.LFO1, "lfo1");
 buildLfo(P.LFO2, "lfo2");
+
+// --- Random modulators (Vital-style) -------------------------------------------
+
+function drawRnd(canvas, histIndex, srcIndex) {
+  const ctx = canvas.getContext("2d");
+  const { width: w, height: h } = canvas;
+  ctx.clearRect(0, 0, w, h);
+  const color = MOD_COLORS[srcIndex];
+  const midY = h / 2;
+
+  ctx.strokeStyle = "rgba(126, 147, 163, 0.22)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, midY);
+  ctx.lineTo(w, midY);
+  ctx.stroke();
+
+  const hist = state.rndHist[histIndex];
+  if (hist.length > 1) {
+    ctx.beginPath();
+    for (let i = 0; i < hist.length; i++) {
+      const x = (i / (RND_HIST_LEN - 1)) * w;
+      const y = midY - clamp(hist[i], -1, 1) * (h * 0.42);
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = Math.max(1.5, h / 36);
+    ctx.stroke();
+  }
+
+  // Live dot rides the newest sample.
+  const live = hist.length ? hist[hist.length - 1] : 0;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(
+    ((hist.length - 1) / (RND_HIST_LEN - 1)) * w,
+    midY - clamp(live, -1, 1) * (h * 0.42),
+    Math.max(2.5, h / 20),
+    0,
+    Math.PI * 2,
+  );
+  ctx.fill();
+}
+
+function buildRnd(base, prefix, srcIndex, histIndex) {
+  $id(`${prefix}-retrig`).append(
+    makeSwitch({ id: base + P.RND_RETRIG, label: "Retrig", min: 0, max: 1, default: 1 }),
+  );
+  $id(`${prefix}-mode`).append(
+    makeSegmented({
+      id: base + P.RND_MODE,
+      options: RND_MODES,
+      min: 0,
+      max: RND_MODES.length - 1,
+      default: 0,
+    }),
+  );
+  $id(`${prefix}-knobs`).append(
+    makeKnob({
+      id: base + P.RND_RATE,
+      label: "Rate",
+      min: 0.01,
+      max: 50,
+      default: 2,
+      scale: "log",
+      fmt: fmt.hzLfo,
+      small: true,
+    }),
+  );
+  const canvas = $id(`viz-${prefix}`);
+  const view = setupCanvas(canvas, () => drawRnd(canvas, histIndex, srcIndex));
+  redrawFns.push(view.redraw);
+  // The trace is a drag source, like the LFO curves.
+  canvas.addEventListener("pointerdown", (e) => {
+    beginModDrag(canvas, srcIndex, e, { x: e.clientX, y: e.clientY });
+  });
+}
+
+buildRnd(P.RND1, "rnd1", 7, 0);
+buildRnd(P.RND2, "rnd2", 8, 1);
+
+// --- Velocity / Note source tiles ------------------------------------------------
+
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const fmtNote = (v) => {
+  const key = Math.round(v);
+  return `${NOTE_NAMES[key % 12]}${Math.floor(key / 12) - 1}`;
+};
+
+function wireSourceBar(canvasId, valueKey, bipolar, srcIndex) {
+  const canvas = $id(canvasId);
+  const draw = () => {
+    const ctx = canvas.getContext("2d");
+    const { width: w, height: h } = canvas;
+    ctx.clearRect(0, 0, w, h);
+    const color = MOD_COLORS[srcIndex];
+    ctx.fillStyle = "rgba(126, 147, 163, 0.15)";
+    ctx.fillRect(0, 0, w, h);
+    const v = clamp(state[valueKey], bipolar ? -1 : 0, 1);
+    ctx.fillStyle = color;
+    if (bipolar) {
+      const mid = w / 2;
+      const span = v * (w / 2);
+      ctx.fillRect(Math.min(mid, mid + span), 0, Math.abs(span), h);
+      ctx.fillStyle = "rgba(126, 147, 163, 0.5)";
+      ctx.fillRect(mid - 0.5, 0, 1, h);
+    } else {
+      ctx.fillRect(0, 0, v * w, h);
+    }
+  };
+  const view = setupCanvas(canvas, draw);
+  redrawFns.push(view.redraw);
+}
+
+wireSourceBar("viz-velo", "velo", false, 4);
+wireSourceBar("viz-note", "note", true, 5);
+
+$id("velo-knobs").append(
+  makeKnob({
+    id: P.VEL_CURVE,
+    label: "Curve",
+    min: -1,
+    max: 1,
+    default: 0,
+    bipolar: true,
+    fmt: fmt.plain,
+    small: true,
+  }),
+);
+$id("note-knobs").append(
+  makeKnob({
+    id: P.NOTE_CENTER,
+    label: "Center",
+    min: 0,
+    max: 127,
+    default: 60,
+    step: 1,
+    fmt: fmtNote,
+    small: true,
+  }),
+  makeKnob({
+    id: P.NOTE_RANGE,
+    label: "Range",
+    min: 1,
+    max: 64,
+    default: 32,
+    step: 1,
+    fmt: fmtSt,
+    small: true,
+  }),
+);
 
 $id("master-mount").append(
   makeKnob({ id: P.MASTER, label: "Master", min: 0, max: 1, default: 0.8, fmt: fmt.pct, dest: 11 }),
@@ -1272,8 +1465,15 @@ const state = {
   env2: 0,
   lfo1: 0,
   lfo2: 0,
+  rnd1: 0,
+  rnd2: 0,
+  velo: 0,
+  note: 0,
   voices: 0,
+  // ~3 s of RND history at the 30 Hz meter rate, for the trace views.
+  rndHist: [[], []],
 };
+const RND_HIST_LEN = 90;
 
 // --- Oscillator stack view -------------------------------------------------------------------
 
@@ -1541,17 +1741,22 @@ function envShape(x, curve) {
 const SUSTAIN_W = 0.16; // fixed visual plateau fraction
 
 function envGeometry(base, w, h) {
+  const extra = ENV_EXTRA[base];
+  const del = val(extra.delay);
   const a = val(base + P.ATTACK);
+  const hold = val(extra.hold);
   const d = val(base + P.DECAY);
   const s = val(base + P.SUSTAIN);
   const r = val(base + P.RELEASE);
-  const total = Math.max(a + d + r, 1e-3);
+  const total = Math.max(del + a + hold + d + r, 1e-3);
+  const delx = (del / total) * (1 - SUSTAIN_W);
   const ax = (a / total) * (1 - SUSTAIN_W);
+  const hx = (hold / total) * (1 - SUSTAIN_W);
   const dx = (d / total) * (1 - SUSTAIN_W);
   const rx = (r / total) * (1 - SUSTAIN_W);
   const pad = h * 0.1;
   const y = (v) => h - pad - v * (h - 2 * pad);
-  return { a, d, s, r, total, ax, dx, rx, y, pad };
+  return { del, a, hold, d, s, r, total, delx, ax, hx, dx, rx, y, pad };
 }
 
 function drawEnv(canvas, base, level) {
@@ -1564,25 +1769,28 @@ function drawEnv(canvas, base, level) {
 
   ctx.beginPath();
   ctx.moveTo(0, g.y(0));
+  ctx.lineTo(g.delx * w, g.y(0)); // delay: flat at zero
   const steps = 28;
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    ctx.lineTo(t * g.ax * w, g.y(envShape(t, curve)));
+    ctx.lineTo((g.delx + t * g.ax) * w, g.y(envShape(t, curve)));
   }
+  ctx.lineTo((g.delx + g.ax + g.hx) * w, g.y(1)); // hold: flat at peak
+  const decayX = g.delx + g.ax + g.hx;
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    ctx.lineTo((g.ax + t * g.dx) * w, g.y(g.s + (1 - g.s) * envShape(1 - t, curve)));
+    ctx.lineTo((decayX + t * g.dx) * w, g.y(g.s + (1 - g.s) * envShape(1 - t, curve)));
   }
-  ctx.lineTo((g.ax + g.dx + SUSTAIN_W) * w, g.y(g.s));
+  ctx.lineTo((decayX + g.dx + SUSTAIN_W) * w, g.y(g.s));
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    ctx.lineTo((g.ax + g.dx + SUSTAIN_W + t * g.rx) * w, g.y(g.s * envShape(1 - t, curve)));
+    ctx.lineTo((decayX + g.dx + SUSTAIN_W + t * g.rx) * w, g.y(g.s * envShape(1 - t, curve)));
   }
   ctx.strokeStyle = accent;
   ctx.lineWidth = Math.max(1.6, h / 52);
   ctx.stroke();
   // Fill under the curve.
-  ctx.lineTo((g.ax + g.dx + SUSTAIN_W + g.rx) * w, g.y(0));
+  ctx.lineTo((decayX + g.dx + SUSTAIN_W + g.rx) * w, g.y(0));
   ctx.lineTo(0, g.y(0));
   ctx.closePath();
   ctx.fillStyle = css("--accent-soft");
@@ -1608,10 +1816,11 @@ function drawEnv(canvas, base, level) {
 }
 
 function envHandles(g, w) {
+  const decayX = g.delx + g.ax + g.hx;
   return [
-    [g.ax * w, g.y(1)],
-    [(g.ax + g.dx) * w, g.y(g.s)],
-    [(g.ax + g.dx + SUSTAIN_W + g.rx) * w, g.y(0)],
+    [(g.delx + g.ax) * w, g.y(1)],
+    [(decayX + g.dx) * w, g.y(g.s)],
+    [(decayX + g.dx + SUSTAIN_W + g.rx) * w, g.y(0)],
   ];
 }
 
@@ -1689,13 +1898,24 @@ wireEnvCanvas("viz-env2", P.ENV2, "env2", 1);
 
 function lfoShape(x, wave) {
   const t = x - Math.floor(x);
+  const rnd = (i) => {
+    const s = Math.sin(i * 127.1) * 43758.5453;
+    return (s - Math.floor(s)) * 2 - 1;
+  };
   if (wave === 0) return Math.sin(2 * Math.PI * t);
   if (wave === 1) return t < 0.5 ? 4 * t - 1 : 3 - 4 * t;
   if (wave === 2) return 2 * t - 1;
   if (wave === 3) return t < 0.5 ? 1 : -1;
-  const stepIndex = Math.floor(x * 8);
-  const r = Math.sin(stepIndex * 127.1) * 43758.5453;
-  return (r - Math.floor(r)) * 2 - 1;
+  if (wave === 5) return 1 - 2 * t;
+  if (wave === 6) return t < 0.25 ? 1 : -1;
+  if (wave === 7) {
+    // smooth S&H: cosine interpolation between hashed steps
+    const cell = Math.floor(x * 4);
+    const f = x * 4 - cell;
+    const k = 0.5 - 0.5 * Math.cos(Math.PI * f);
+    return rnd(cell) + (rnd(cell + 1) - rnd(cell)) * k;
+  }
+  return rnd(Math.floor(x * 8));
 }
 
 function drawLfo(canvas, base, liveValue) {
@@ -1864,11 +2084,20 @@ function handleBinary(data) {
     state.stack[osc] = frames;
     invalidate();
   } else if (magic === "ZWTM") {
+    if (ab.byteLength < 37) return;
     state.voices = view.getUint8(4);
     state.env1 = view.getFloat32(5, true);
     state.env2 = view.getFloat32(9, true);
     state.lfo1 = view.getFloat32(13, true);
     state.lfo2 = view.getFloat32(17, true);
+    state.rnd1 = view.getFloat32(21, true);
+    state.rnd2 = view.getFloat32(25, true);
+    state.velo = view.getFloat32(29, true);
+    state.note = view.getFloat32(33, true);
+    for (const [i, v] of [state.rnd1, state.rnd2].entries()) {
+      state.rndHist[i].push(v);
+      if (state.rndHist[i].length > RND_HIST_LEN) state.rndHist[i].shift();
+    }
     const note = $id("voice-note");
     if (note) note.textContent = `${state.voices} voice${state.voices === 1 ? "" : "s"}`;
     invalidate();
@@ -1886,6 +2115,6 @@ sendSet = connect({
 });
 
 // Tiny read-only hook for automated UI tests.
-window.__waveSynth = { val };
+window.__waveSynth = { val, state };
 
 invalidate();

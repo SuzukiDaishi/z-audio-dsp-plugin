@@ -75,6 +75,11 @@ pub struct EnvParams {
     pub sustain: f32,
     pub release_s: f32,
     pub curve: f32,
+    /// Onset delay before the attack begins (the level is held — on a
+    /// stolen/retriggered voice that means the previous ringing level).
+    pub delay_s: f32,
+    /// Peak hold between attack and decay.
+    pub hold_s: f32,
 }
 
 impl EnvParams {
@@ -85,6 +90,8 @@ impl EnvParams {
             sustain,
             release_s: 0.15,
             curve: 0.0,
+            delay_s: 0.0,
+            hold_s: 0.0,
         }
     }
 }
@@ -95,6 +102,12 @@ pub struct LfoParams {
     pub rate_hz: f32,
     pub phase: f32,
     pub retrig: bool,
+    /// Output fades in over this many seconds after (re)trigger.
+    pub fade_s: f32,
+    /// Run one cycle and hold the final value. With retrig off the free
+    /// LFO runs its single cycle once per engine lifetime — a curiosity;
+    /// pair one-shot with retrig for the useful mini-envelope behavior.
+    pub one_shot: bool,
 }
 
 impl Default for LfoParams {
@@ -103,6 +116,26 @@ impl Default for LfoParams {
             wave: 0,
             rate_hz: 2.0,
             phase: 0.0,
+            retrig: true,
+            fade_s: 0.0,
+            one_shot: false,
+        }
+    }
+}
+
+/// Vital-style random modulator settings.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct RndParams {
+    pub mode: u8,
+    pub rate_hz: f32,
+    pub retrig: bool,
+}
+
+impl Default for RndParams {
+    fn default() -> Self {
+        Self {
+            mode: RND_SH,
+            rate_hz: 2.0,
             retrig: true,
         }
     }
@@ -141,6 +174,13 @@ pub struct SynthParams {
     pub dist_mode: u8,
     pub dist_drive: f32,
     pub dist_mix: f32,
+    pub rnd1: RndParams,
+    pub rnd2: RndParams,
+    /// Velocity mod-source response: -1 soft … 0 linear … 1 hard.
+    pub vel_curve: f32,
+    /// Note mod-source mapping: `((key - center) / range).clamp(-1, 1)`.
+    pub note_center: u8,
+    pub note_range: u8,
 }
 
 impl Default for SynthParams {
@@ -170,6 +210,11 @@ impl Default for SynthParams {
             dist_mode: DIST_TANH,
             dist_drive: 0.3,
             dist_mix: 1.0,
+            rnd1: RndParams::default(),
+            rnd2: RndParams::default(),
+            vel_curve: 0.0,
+            note_center: 60,
+            note_range: 32,
         }
     }
 }
@@ -201,15 +246,20 @@ impl Rng {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum EnvStage {
     Idle,
+    Delay,
     Attack,
+    Hold,
     Decay,
     Sustain,
     Release,
 }
 
-/// ADSR with a shared curvature control. Stage position advances linearly
-/// per sample; the curve maps position → level through `x^(2^(3c))`,
-/// evaluated via a 257-entry LUT so the audio path never calls `powf`.
+/// DAHDSR with a shared curvature control. Stage position advances
+/// linearly per sample; the curve maps position → level through
+/// `x^(2^(3c))`, evaluated via a 257-entry LUT so the audio path never
+/// calls `powf`. Delay holds the current level (0 on a fresh voice, the
+/// ringing level on a retrigger) before the attack; Hold pins the peak
+/// between attack and decay.
 #[derive(Clone)]
 struct Adsr {
     stage: EnvStage,
@@ -255,10 +305,16 @@ impl Adsr {
     }
 
     fn gate_on(&mut self) {
-        // Restart the attack from the current level so retriggers don't click.
+        // The level is left untouched: a fresh voice sits at 0, a
+        // retriggered/stolen voice keeps ringing through the delay.
+        self.pos = 0.0;
+        self.stage = EnvStage::Delay;
+    }
+
+    /// Enter the attack, resuming from the current level so retriggers
+    /// don't click (shape is monotonic, a coarse inverse is fine here).
+    fn begin_attack(&mut self) {
         self.pos = if self.level > 0.0 {
-            // Find the attack position that resumes at the current level:
-            // shape is monotonic, a coarse inverse is fine here.
             let mut lo = 0.0f32;
             let mut hi = 1.0f32;
             for _ in 0..12 {
@@ -288,20 +344,52 @@ impl Adsr {
         matches!(self.stage, EnvStage::Idle)
     }
 
-    /// Advance one sample and return the new level.
+    /// Advance one sample and return the new level. The Delay arm falls
+    /// through into Attack within the same tick (via the loop), so a zero
+    /// delay is bit-identical to the pre-DAHDSR behavior.
     #[inline]
     fn tick(&mut self, p: &EnvParams, inv_sr: f32) -> f32 {
+        loop {
+            match self.stage {
+                EnvStage::Delay => {
+                    if p.delay_s > 1.0e-4 {
+                        self.pos += inv_sr / p.delay_s;
+                        if self.pos < 1.0 {
+                            // Level is held (0 fresh, ringing on retrig).
+                            return self.level;
+                        }
+                    }
+                    self.begin_attack();
+                    continue; // run Attack in the same tick
+                }
+                EnvStage::Hold => {
+                    self.level = 1.0;
+                    self.pos += inv_sr / p.hold_s.max(0.0005);
+                    if self.pos >= 1.0 {
+                        self.pos = 0.0;
+                        self.stage = EnvStage::Decay;
+                    }
+                }
+                _ => {}
+            }
+            break;
+        }
         match self.stage {
             EnvStage::Idle => {
                 self.level = 0.0;
             }
+            EnvStage::Delay | EnvStage::Hold => {}
             EnvStage::Attack => {
                 let step = inv_sr / p.attack_s.max(0.0005);
                 self.pos += step;
                 if self.pos >= 1.0 {
                     self.level = 1.0;
                     self.pos = 0.0;
-                    self.stage = EnvStage::Decay;
+                    self.stage = if p.hold_s > 1.0e-4 {
+                        EnvStage::Hold
+                    } else {
+                        EnvStage::Decay
+                    };
                 } else {
                     self.level = self.shape(self.pos);
                 }
@@ -348,6 +436,10 @@ struct Lfo {
     phase: f32,
     /// Latched sample-and-hold value, renewed on each phase wrap.
     sh_value: f32,
+    /// Previous S&H value — the smooth-S&H wave interpolates prev→value.
+    sh_prev: f32,
+    /// Seconds since the last (re)trigger, drives the fade-in.
+    age: f32,
     rng: Rng,
 }
 
@@ -358,27 +450,53 @@ impl Lfo {
         Self {
             phase: 0.0,
             sh_value: sh,
+            sh_prev: sh,
+            age: 0.0,
             rng,
         }
     }
 
     fn retrigger(&mut self, start_phase: f32) {
         self.phase = start_phase.rem_euclid(1.0);
+        self.sh_prev = self.sh_value;
         self.sh_value = self.rng.next_bipolar();
+        self.age = 0.0;
     }
 
-    /// Advance by `dt` seconds and return the bipolar value in [-1, 1].
+    /// Advance by `dt` seconds and return the (faded) bipolar value.
     fn advance(&mut self, p: &LfoParams, dt: f32) -> f32 {
-        self.phase += p.rate_hz.max(0.01) * dt;
-        if self.phase >= 1.0 {
-            self.phase -= self.phase.floor();
-            self.sh_value = self.rng.next_bipolar();
+        self.age += dt;
+        if p.one_shot {
+            // Run one cycle and pin at the end (S&H holds its value).
+            self.phase = (self.phase + p.rate_hz.max(0.01) * dt).min(1.0);
+        } else {
+            self.phase += p.rate_hz.max(0.01) * dt;
+            if self.phase >= 1.0 {
+                self.phase -= self.phase.floor();
+                self.sh_prev = self.sh_value;
+                self.sh_value = self.rng.next_bipolar();
+            }
         }
-        self.value(p)
+        self.output(p)
+    }
+
+    #[inline]
+    fn fade_gain(&self, p: &LfoParams) -> f32 {
+        if p.fade_s > 1.0e-4 {
+            (self.age / p.fade_s).min(1.0)
+        } else {
+            1.0
+        }
+    }
+
+    /// Current faded output (no state change) — shared by `advance` and
+    /// the UI meter.
+    fn output(&self, p: &LfoParams) -> f32 {
+        self.value(p) * self.fade_gain(p)
     }
 
     fn value(&self, p: &LfoParams) -> f32 {
-        let x = self.phase;
+        let x = self.phase.min(1.0);
         match p.wave {
             0 => (core::f32::consts::TAU * x).sin(),
             1 => {
@@ -397,7 +515,144 @@ impl Lfo {
                     -1.0
                 }
             }
+            4 => self.sh_value,
+            5 => 1.0 - 2.0 * x, // ramp down
+            6 => {
+                // pulse 25%
+                if x < 0.25 {
+                    1.0
+                } else {
+                    -1.0
+                }
+            }
+            7 => {
+                // smooth S&H: cosine interpolation prev → current
+                let t = 0.5 - 0.5 * (core::f32::consts::PI * x).cos();
+                self.sh_prev + (self.sh_value - self.sh_prev) * t
+            }
             _ => self.sh_value,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Random modulator (Vital-style)
+// ---------------------------------------------------------------------------
+
+/// Random mod source with four flavors: stepped S&H, cosine-smoothed
+/// targets, Perlin-ish drift (two smoothed streams at related rates), and
+/// a Lorenz-attractor chaos mode. Deterministic per xorshift stream, like
+/// everything else in the engine.
+#[derive(Clone, Copy)]
+struct Rnd {
+    phase: f32,
+    prev: f32,
+    target: f32,
+    // Drift's secondary stream at 2.7× the rate.
+    phase2: f32,
+    prev2: f32,
+    target2: f32,
+    // Lorenz state for the chaos mode.
+    lx: f32,
+    ly: f32,
+    lz: f32,
+    rng: Rng,
+}
+
+impl Rnd {
+    fn new(seed: u32) -> Self {
+        let mut rng = Rng(seed | 1);
+        let a = rng.next_bipolar();
+        let b = rng.next_bipolar();
+        let c = rng.next_bipolar();
+        let d = rng.next_bipolar();
+        Self {
+            phase: 0.0,
+            prev: a,
+            target: b,
+            phase2: 0.0,
+            prev2: c,
+            target2: d,
+            lx: 0.1,
+            ly: 0.0,
+            lz: 25.0,
+            rng: rng,
+        }
+    }
+
+    fn retrigger(&mut self) {
+        self.phase = 0.0;
+        self.prev = self.target;
+        self.target = self.rng.next_bipolar();
+        self.phase2 = 0.0;
+        self.prev2 = self.target2;
+        self.target2 = self.rng.next_bipolar();
+        // Perturb (deterministically) so every note's chaos differs.
+        self.lx = 0.1 + 0.05 * self.rng.next_bipolar();
+        self.ly = 0.0;
+        self.lz = 25.0;
+    }
+
+    /// Advance by `dt` seconds and return the bipolar value.
+    fn advance(&mut self, p: &RndParams, dt: f32) -> f32 {
+        let rate = p.rate_hz.max(0.01);
+        match p.mode {
+            RND_CHAOS => {
+                // Lorenz (σ=10, ρ=28, β=8/3); the rate scales integration
+                // speed. Substeps cap the Euler dt for stability.
+                let h = rate * dt * 0.4;
+                let n = (h / 0.005).ceil().clamp(1.0, 16.0) as usize;
+                let hs = h / n as f32;
+                for _ in 0..n {
+                    let dx = 10.0 * (self.ly - self.lx);
+                    let dy = self.lx * (28.0 - self.lz) - self.ly;
+                    let dz = self.lx * self.ly - (8.0 / 3.0) * self.lz;
+                    self.lx = (self.lx + dx * hs).clamp(-60.0, 60.0);
+                    self.ly = (self.ly + dy * hs).clamp(-60.0, 60.0);
+                    self.lz = (self.lz + dz * hs).clamp(0.0, 80.0);
+                }
+            }
+            RND_DRIFT => {
+                self.phase += rate * dt;
+                if self.phase >= 1.0 {
+                    self.phase -= self.phase.floor();
+                    self.prev = self.target;
+                    self.target = self.rng.next_bipolar();
+                }
+                self.phase2 += rate * 2.7 * dt;
+                if self.phase2 >= 1.0 {
+                    self.phase2 -= self.phase2.floor();
+                    self.prev2 = self.target2;
+                    self.target2 = self.rng.next_bipolar();
+                }
+            }
+            _ => {
+                // S&H and Smooth share the single-stream accumulator.
+                self.phase += rate * dt;
+                if self.phase >= 1.0 {
+                    self.phase -= self.phase.floor();
+                    self.prev = self.target;
+                    self.target = self.rng.next_bipolar();
+                }
+            }
+        }
+        self.value(p)
+    }
+
+    /// Current output (no state change) — shared with the UI meter.
+    fn value(&self, p: &RndParams) -> f32 {
+        let smooth = |prev: f32, target: f32, x: f32| {
+            let t = 0.5 - 0.5 * (core::f32::consts::PI * x).cos();
+            prev + (target - prev) * t
+        };
+        match p.mode {
+            RND_SH => self.target,
+            RND_SMOOTH => smooth(self.prev, self.target, self.phase),
+            RND_DRIFT => {
+                0.65 * smooth(self.prev, self.target, self.phase)
+                    + 0.35 * smooth(self.prev2, self.target2, self.phase2)
+            }
+            _ => (self.lx / 20.0).clamp(-1.0, 1.0),
         }
     }
 }
@@ -668,6 +923,8 @@ struct Voice {
     env2: Adsr,
     lfo1: Lfo,
     lfo2: Lfo,
+    rnd1: Rnd,
+    rnd2: Rnd,
     osc_a: UnisonOsc,
     osc_b: UnisonOsc,
     /// 1-sample-delayed raw table samples (unison voice 0, pre-gain) —
@@ -703,6 +960,8 @@ impl Voice {
             env2: Adsr::new(),
             lfo1: Lfo::new(seed.wrapping_mul(2654435761).wrapping_add(1)),
             lfo2: Lfo::new(seed.wrapping_mul(40503).wrapping_add(7)),
+            rnd1: Rnd::new(seed.wrapping_mul(2246822519).wrapping_add(3)),
+            rnd2: Rnd::new(seed.wrapping_mul(3266489917).wrapping_add(11)),
             osc_a: UnisonOsc::new(),
             osc_b: UnisonOsc::new(),
             fm_a_prev: 0.0,
@@ -757,11 +1016,30 @@ pub struct SynthEngine {
     /// Free-running LFO phases shared by voices with retrig off.
     free_lfo1: Lfo,
     free_lfo2: Lfo,
+    /// Free-running random modulators for retrig-off voices.
+    free_rnd1: Rnd,
+    free_rnd2: Rnd,
+    /// Most recent note-on velocity/key — the UI meter's VELO/NOTE tiles.
+    last_velocity: f32,
+    last_key: u8,
     /// Smoothed master gain (one-pole per control block).
     master_smooth: f32,
     /// Sample-hold state for the Crush distortion mode.
     decim_counter: u32,
     decim_hold: (f32, f32),
+}
+
+/// One frame of live modulation values for the UI meter packet.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub struct MeterFrame {
+    pub env1: f32,
+    pub env2: f32,
+    pub lfo1: f32,
+    pub lfo2: f32,
+    pub rnd1: f32,
+    pub rnd2: f32,
+    pub velocity: f32,
+    pub note: f32,
 }
 
 impl SynthEngine {
@@ -781,6 +1059,10 @@ impl SynthEngine {
             last_note: 60.0,
             free_lfo1: Lfo::new(0xA511_E9B3),
             free_lfo2: Lfo::new(0x1234_5678),
+            free_rnd1: Rnd::new(0xC0FF_EE01),
+            free_rnd2: Rnd::new(0xBADD_CAFE),
+            last_velocity: 0.0,
+            last_key: 60,
             master_smooth: 0.8,
             decim_counter: 0,
             decim_hold: (0.0, 0.0),
@@ -846,20 +1128,27 @@ impl SynthEngine {
         self.voices.iter().filter(|v| v.active).count()
     }
 
-    /// Peak env levels + LFO values for the UI meter packet.
-    pub fn meter(&self) -> (f32, f32, f32, f32) {
+    /// Live modulation values for the UI meter packet.
+    pub fn meter(&self) -> MeterFrame {
         let mut env1 = 0.0f32;
         let mut env2 = 0.0f32;
         for v in self.voices.iter().filter(|v| v.active) {
             env1 = env1.max(v.env1.level);
             env2 = env2.max(v.env2.level);
         }
-        (
+        let p = &self.params;
+        MeterFrame {
             env1,
             env2,
-            self.free_lfo1.value(&self.params.lfo1),
-            self.free_lfo2.value(&self.params.lfo2),
-        )
+            lfo1: self.free_lfo1.output(&p.lfo1),
+            lfo2: self.free_lfo2.output(&p.lfo2),
+            rnd1: self.free_rnd1.value(&p.rnd1),
+            rnd2: self.free_rnd2.value(&p.rnd2),
+            velocity: self.last_velocity,
+            note: ((self.last_key as f32 - p.note_center as f32)
+                / p.note_range.max(1) as f32)
+                .clamp(-1.0, 1.0),
+        }
     }
 
     /// Fill `out` with the morphed single-cycle waveform of one oscillator
@@ -949,6 +1238,14 @@ impl SynthEngine {
         if self.params.lfo2.retrig {
             v.lfo2.retrigger(self.params.lfo2.phase);
         }
+        if self.params.rnd1.retrig {
+            v.rnd1.retrigger();
+        }
+        if self.params.rnd2.retrig {
+            v.rnd2.retrigger();
+        }
+        self.last_velocity = v.velocity;
+        self.last_key = key;
         v.osc_a.trigger(&self.params.osc_a, &mut rng);
         v.osc_b.trigger(&self.params.osc_b, &mut rng);
         v.fm_a_prev = 0.0;
@@ -985,9 +1282,12 @@ impl SynthEngine {
         let dt = n as f32 * self.inv_sample_rate;
         let p = self.params;
 
-        // Free-running LFOs advance once per block regardless of voices.
+        // Free-running LFOs/randoms advance once per block regardless of
+        // voices.
         let free1 = self.free_lfo1.advance(&p.lfo1, dt);
         let free2 = self.free_lfo2.advance(&p.lfo2, dt);
+        let free_r1 = self.free_rnd1.advance(&p.rnd1, dt);
+        let free_r2 = self.free_rnd2.advance(&p.rnd2, dt);
 
         // Master smoothing toward the (possibly mod-shifted) target happens
         // after voice mods are known; collect the largest master offset.
@@ -1022,6 +1322,26 @@ impl SynthEngine {
             } else {
                 free2
             };
+            let rnd1 = if p.rnd1.retrig {
+                voice.rnd1.advance(&p.rnd1, dt)
+            } else {
+                free_r1
+            };
+            let rnd2 = if p.rnd2.retrig {
+                voice.rnd2.advance(&p.rnd2, dt)
+            } else {
+                free_r2
+            };
+            // Shaped velocity (curve 0 bypasses powf and stays bit-exact
+            // with the pre-expansion behavior) and centered note source.
+            let vel_src = if p.vel_curve == 0.0 {
+                voice.velocity
+            } else {
+                voice.velocity.powf((3.0 * p.vel_curve).exp2())
+            };
+            let note_src = ((voice.key as f32 - p.note_center as f32)
+                / p.note_range.max(1) as f32)
+                .clamp(-1.0, 1.0);
 
             // Mod matrix.
             let mut m = ModOffsets::default();
@@ -1034,8 +1354,10 @@ impl SynthEngine {
                     SRC_ENV2 => voice.env2.level,
                     SRC_LFO1 => lfo1,
                     SRC_LFO2 => lfo2,
-                    SRC_VELOCITY => voice.velocity,
-                    SRC_NOTE => (voice.key as f32 - 60.0) / 32.0,
+                    SRC_VELOCITY => vel_src,
+                    SRC_NOTE => note_src,
+                    SRC_RND1 => rnd1,
+                    SRC_RND2 => rnd2,
                     _ => continue,
                 };
                 let x = slot.amount * src;
@@ -1877,6 +2199,314 @@ mod tests {
             wide > flat * 4.0,
             "detune modulation should widen the image: flat={flat} wide={wide}"
         );
+    }
+
+    #[test]
+    fn env_delay_delays_onset() {
+        let mut e = engine();
+        let mut p = *e.params();
+        p.env1.delay_s = 0.2;
+        p.env1.attack_s = 0.0;
+        e.set_params(p);
+        e.note_on(60, 1.0);
+        let (early, _) = render_seconds(&mut e, 0.15);
+        assert!(peak(&early) < 1.0e-4, "audio must be silent during delay");
+        let (later, _) = render_seconds(&mut e, 0.2);
+        assert!(peak(&later) > 0.01, "audio must start after the delay");
+    }
+
+    #[test]
+    fn env_hold_holds_peak() {
+        let level_at_200ms = |hold_s: f32| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.env1.attack_s = 0.0;
+            p.env1.hold_s = hold_s;
+            p.env1.decay_s = 0.02;
+            p.env1.sustain = 0.0;
+            e.set_params(p);
+            e.note_on(60, 1.0);
+            let _ = render_seconds(&mut e, 0.18);
+            let (l, _) = render_seconds(&mut e, 0.04);
+            peak(&l)
+        };
+        assert!(level_at_200ms(0.3) > 0.1, "hold must keep the peak alive");
+        assert!(level_at_200ms(0.0) < 1.0e-3, "no hold: decayed by 200 ms");
+    }
+
+    #[test]
+    fn env_delay_zero_is_transparent() {
+        // Same param set with and without explicitly-zero delay/hold must
+        // render bit-identically (the DAHDSR regression guard).
+        let render = || {
+            let mut e = engine();
+            e.note_on(48, 0.9);
+            render_seconds(&mut e, 0.2).0
+        };
+        let a = render();
+        let b = render();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn env_retrigger_during_ring_is_continuous() {
+        // Unit-level: gate on, run, gate off, ring down a little, retrigger
+        // with a delay — the level must hold during Delay (no jump to 0).
+        let p = EnvParams {
+            attack_s: 0.05,
+            decay_s: 0.2,
+            sustain: 0.7,
+            release_s: 0.5,
+            curve: 0.0,
+            delay_s: 0.05,
+            hold_s: 0.0,
+        };
+        let inv_sr = 1.0 / 48_000.0;
+        let mut env = Adsr::new();
+        env.gate_on();
+        for _ in 0..4800 {
+            env.tick(&p, inv_sr);
+        }
+        env.gate_off();
+        for _ in 0..2400 {
+            env.tick(&p, inv_sr);
+        }
+        let ring = env.level;
+        assert!(ring > 0.01);
+        env.gate_on();
+        // During the retrigger delay the level must stay put.
+        for _ in 0..1200 {
+            let l = env.tick(&p, inv_sr);
+            assert!(
+                (l - ring).abs() < 1.0e-5,
+                "delay must hold the ringing level: {l} vs {ring}"
+            );
+        }
+    }
+
+    #[test]
+    fn lfo_fade_ramps() {
+        // Tremolo depth = spread of per-chunk RMS. With a 2 s fade the
+        // depth must grow between the first and last half-second.
+        let tremolo_depth = |window: core::ops::Range<usize>, buf: &[f32]| {
+            let chunks: Vec<f64> = buf[window]
+                .chunks(1024)
+                .map(|c| (c.iter().map(|v| (v * v) as f64).sum::<f64>() / c.len() as f64).sqrt())
+                .collect();
+            let lo = chunks.iter().cloned().fold(f64::MAX, f64::min);
+            let hi = chunks.iter().cloned().fold(0.0f64, f64::max);
+            hi - lo
+        };
+        let mut e = engine();
+        let mut p = *e.params();
+        p.lfo1.rate_hz = 8.0;
+        p.lfo1.fade_s = 3.0;
+        p.filter_enable = false;
+        p.env1.attack_s = 0.0;
+        p.mods[0] = ModSlot {
+            source: SRC_LFO1 as u8,
+            dest: DST_A_LEVEL as u8,
+            amount: 0.7,
+        };
+        e.set_params(p);
+        e.note_on(48, 1.0);
+        let frames = 96_000; // 2 s
+        let mut l = vec![0.0f32; frames];
+        let mut r = vec![0.0f32; frames];
+        e.render(&mut l, &mut r);
+        let early = tremolo_depth(4_800..28_800, &l);
+        let late = tremolo_depth(72_000..96_000, &l);
+        assert!(
+            late > early * 2.0,
+            "fade-in should deepen the LFO over time: early={early} late={late}"
+        );
+    }
+
+    #[test]
+    fn lfo_one_shot_stops() {
+        let p = LfoParams {
+            wave: 2, // saw up
+            rate_hz: 4.0,
+            phase: 0.0,
+            retrig: true,
+            fade_s: 0.0,
+            one_shot: true,
+        };
+        let mut lfo = Lfo::new(1);
+        lfo.retrigger(0.0);
+        let mut last = 0.0;
+        for _ in 0..2000 {
+            last = lfo.advance(&p, 0.001); // 2 s total, period 0.25 s
+        }
+        assert!((last - 1.0).abs() < 1.0e-6, "saw one-shot pins at 1.0");
+        // S&H one-shot holds a constant.
+        let p_sh = LfoParams { wave: 4, ..p };
+        let mut sh = Lfo::new(7);
+        sh.retrigger(0.0);
+        let first = sh.advance(&p_sh, 0.5);
+        for _ in 0..100 {
+            assert_eq!(sh.advance(&p_sh, 0.5), first);
+        }
+    }
+
+    #[test]
+    fn lfo_new_waves_bounded_and_smooth_sh_is_continuous() {
+        for wave in [5u8, 6, 7] {
+            let p = LfoParams {
+                wave,
+                rate_hz: 3.0,
+                ..LfoParams::default()
+            };
+            let mut lfo = Lfo::new(11 + wave as u32);
+            let mut prev = lfo.advance(&p, 0.0007);
+            for _ in 0..10_000 {
+                let v = lfo.advance(&p, 0.0007);
+                assert!(v.is_finite() && v.abs() <= 1.0, "wave {wave} out of range");
+                if wave == 7 {
+                    assert!(
+                        (v - prev).abs() < 0.1,
+                        "smooth S&H must be continuous: {prev} -> {v}"
+                    );
+                }
+                prev = v;
+            }
+        }
+    }
+
+    #[test]
+    fn random_modes_finite_distinct_deterministic() {
+        let sequence = |mode: u8, seed: u32| -> Vec<f32> {
+            let p = RndParams {
+                mode,
+                rate_hz: 6.0,
+                retrig: true,
+            };
+            let mut rnd = Rnd::new(seed);
+            (0..400).map(|_| rnd.advance(&p, 0.002)).collect()
+        };
+        let mut outputs = Vec::new();
+        for mode in 0..RND_MODE_COUNT as u8 {
+            let a = sequence(mode, 42);
+            let b = sequence(mode, 42);
+            assert_eq!(a, b, "mode {mode} must be deterministic");
+            assert!(a.iter().all(|v| v.is_finite() && v.abs() <= 1.0));
+            assert!(
+                a.iter().any(|v| v.abs() > 1.0e-3),
+                "mode {mode} must actually move"
+            );
+            outputs.push(a);
+        }
+        for i in 0..outputs.len() {
+            for j in i + 1..outputs.len() {
+                assert_ne!(outputs[i], outputs[j], "modes {i} and {j} identical");
+            }
+        }
+    }
+
+    #[test]
+    fn chaos_stays_bounded_at_max_rate() {
+        let p = RndParams {
+            mode: RND_CHAOS,
+            rate_hz: 50.0,
+            retrig: true,
+        };
+        let mut rnd = Rnd::new(99);
+        let dt = 32.0 / 48_000.0;
+        for _ in 0..100_000 {
+            let v = rnd.advance(&p, dt);
+            assert!(v.is_finite() && v.abs() <= 1.0);
+        }
+    }
+
+    #[test]
+    fn random_source_modulates_the_engine() {
+        let mut e = engine();
+        let mut p = *e.params();
+        p.filter_enable = false;
+        p.rnd1.mode = RND_SMOOTH;
+        p.rnd1.rate_hz = 12.0;
+        p.mods[0] = ModSlot {
+            source: SRC_RND1 as u8,
+            dest: DST_A_LEVEL as u8,
+            amount: 1.0,
+        };
+        e.set_params(p);
+        e.note_on(48, 1.0);
+        let (with_mod, _) = render_seconds(&mut e, 0.5);
+        let mut e2 = engine();
+        let mut p2 = *e2.params();
+        p2.filter_enable = false;
+        e2.set_params(p2);
+        e2.note_on(48, 1.0);
+        let (without, _) = render_seconds(&mut e2, 0.5);
+        let diff: f32 = with_mod
+            .iter()
+            .zip(&without)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
+            / without.len() as f32;
+        assert!(diff > 1.0e-4, "random source must alter the render");
+    }
+
+    #[test]
+    fn vel_curve_shapes_velocity_source() {
+        let rms = |curve: f32| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.filter_enable = false;
+            p.vel_curve = curve;
+            p.mods[0] = ModSlot {
+                source: SRC_VELOCITY as u8,
+                dest: DST_A_LEVEL as u8,
+                amount: -0.74, // pulls the 0.75 default level down by velocity
+            };
+            e.set_params(p);
+            e.note_on(60, 0.5);
+            let _ = render_seconds(&mut e, 0.1);
+            let (l, _) = render_seconds(&mut e, 0.2);
+            (l.iter().map(|v| (v * v) as f64).sum::<f64>() / l.len() as f64).sqrt()
+        };
+        // Soft curve boosts a mid velocity (more negative mod → quieter);
+        // hard curve shrinks it (less mod → louder).
+        let soft = rms(-1.0);
+        let hard = rms(1.0);
+        assert!(
+            hard > soft * 1.2,
+            "curve must reshape the velocity source: soft={soft} hard={hard}"
+        );
+    }
+
+    #[test]
+    fn note_center_shifts_the_source_sign() {
+        let pitch_offset = |center: f32, key: u8| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.filter_enable = false;
+            p.note_center = center as u8;
+            p.note_range = 12;
+            p.env1.attack_s = 0.0;
+            p.mods[0] = ModSlot {
+                source: SRC_NOTE as u8,
+                dest: DST_A_PITCH as u8,
+                amount: 1.0,
+            };
+            e.set_params(p);
+            e.note_on(key, 1.0);
+            let frames = 8192;
+            let mut l = vec![0.0f32; frames];
+            let mut r = vec![0.0f32; frames];
+            e.render(&mut l, &mut r);
+            e.render(&mut l, &mut r);
+            // Dominant frequency vs the unmodulated pitch tells the sign.
+            let f0 = 440.0 * ((key as f64 - 69.0) / 12.0).exp2();
+            let up = goertzel(&l, f0 * 2.0); // +12 semitone shift target
+            let down = goertzel(&l, f0 * 0.5);
+            up.partial_cmp(&down).unwrap()
+        };
+        // Key one octave above center → source +1 → pitch up dominates.
+        assert_eq!(pitch_offset(48.0, 60), core::cmp::Ordering::Greater);
+        // Same key below center 72 → source -1 → pitch down dominates.
+        assert_eq!(pitch_offset(72.0, 60), core::cmp::Ordering::Less);
     }
 
     #[test]

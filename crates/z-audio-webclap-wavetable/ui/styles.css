@@ -723,6 +723,82 @@ main {
   white-space: nowrap;
 }
 
+/* -- random modulators + source tiles row --------------------------------- */
+
+.knob-grid.cols-1 {
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+
+.knob-grid.cols-7 {
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.rnd-viz {
+  min-height: 48px;
+}
+
+.rnd-viz canvas {
+  cursor: grab;
+}
+
+.sources-row .segmented button {
+  font-size: 9px;
+  letter-spacing: 0;
+  padding: 3px 1px;
+}
+
+.source-tiles {
+  display: grid;
+  flex: 1;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+}
+
+.source-tile {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.source-tile .mod-chip {
+  align-self: flex-start;
+}
+
+.source-bar-viz {
+  flex: none;
+  height: 22px;
+  min-height: 22px;
+  width: 100%;
+}
+
+.source-bar-viz canvas {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
+.rnd-viz {
+  max-height: 110px;
+}
+
+/* The 8-option LFO wave picker reuses the warp-select styling. */
+.lfo-controls select {
+  appearance: none;
+  background: #0c1218;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--text-mid);
+  font-size: 10px;
+  min-width: 0;
+  padding: 3px 6px;
+  width: 100%;
+}
+
+.lfo-controls select:hover {
+  border-color: var(--line-strong);
+}
+
 .warp-pick select,
 .preset-pick select {
   appearance: none;
