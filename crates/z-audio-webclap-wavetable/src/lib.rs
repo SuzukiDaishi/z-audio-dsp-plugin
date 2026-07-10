@@ -771,12 +771,24 @@ mod tests {
             MOD_BASE + 3 + MOD_SOURCE,
             MOD_BASE + 6 + MOD_SOURCE,
         ]);
-        // Pinned to the pre-Random source set (1..=6): the factory bank
-        // predates RND1/RND2; their coverage lands with a future preset
-        // refresh.
-        for s in 1..7 {
+        for s in 1..SRC_COUNT as i64 {
             assert!(sources.contains(&s), "no preset uses mod source {s}");
         }
+        let rnd_modes = collect(&[RND1_BASE + RND_MODE, RND2_BASE + RND_MODE]);
+        for m in 0..RND_MODE_COUNT as i64 {
+            assert!(rnd_modes.contains(&m), "no preset uses random mode {m}");
+        }
+        // The DAHDSR / LFO extensions must be showcased somewhere too.
+        let uses = |id: u32| presets.iter().flatten().any(|&(pid, _)| pid == id);
+        assert!(uses(P_ENV1_DELAY), "no preset uses env delay");
+        assert!(
+            uses(P_LFO1_FADE) || uses(P_LFO2_FADE),
+            "no preset uses LFO fade"
+        );
+        assert!(
+            uses(P_LFO1_ONESHOT) || uses(P_LFO2_ONESHOT),
+            "no preset uses LFO one-shot"
+        );
     }
 
     #[test]

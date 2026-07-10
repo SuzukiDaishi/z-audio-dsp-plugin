@@ -25,7 +25,8 @@ export const PRESET_GROUPS = [
     name: "Bass",
     presets: [
       {
-        // Classic LFO-wobble dubstep bass on the Growl table.
+        // Classic LFO-wobble dubstep bass on the Growl table; RND1 drift
+        // keeps the morph from ever repeating exactly.
         name: "Wub Machine",
         set: {
           511: 5, 512: 0.35, 513: -1,
@@ -33,7 +34,9 @@ export const PRESET_GROUPS = [
           570: 0, 571: 2,
           580: 2, 581: 9, 582: 0.6,
           583: 2, 584: 1, 585: 0.3,
+          586: 7, 587: 1, 588: 0.25,
           604: 1, 605: 0, 606: 0.45, 607: 0.8,
+          620: 2, 621: 0.4,
         },
       },
       {
@@ -58,7 +61,9 @@ export const PRESET_GROUPS = [
           565: 0.002, 566: 0.4, 567: 0.1,
           580: 1, 581: 1, 582: 0.7,
           583: 1, 584: 12, 585: 0.4,
+          586: 7, 587: 12, 588: 0.35,
           604: 1, 605: 1, 606: 0.4, 607: 0.8,
+          620: 3, 621: 3,
         },
       },
       {
@@ -101,7 +106,9 @@ export const PRESET_GROUPS = [
           551: 1, 552: 300, 553: 0.25,
           571: 0.8,
           580: 2, 581: 9, 582: 0.35,
+          583: 8, 584: 9, 585: 0.25,
           604: 1, 605: 2, 606: 0.5, 607: 0.7,
+          623: 2, 624: 0.5,
         },
       },
       {
@@ -113,7 +120,9 @@ export const PRESET_GROUPS = [
           570: 4, 571: 5,
           580: 2, 581: 9, 582: 0.6,
           583: 1, 584: 1, 585: 0.5,
+          586: 8, 587: 10, 588: 0.4,
           604: 1, 605: 0, 606: 0.3, 607: 0.8,
+          623: 0, 624: 5,
         },
       },
       {
@@ -171,7 +180,9 @@ export const PRESET_GROUPS = [
           571: 3,
           580: 2, 581: 12, 582: 0.5,
           583: 2, 584: 9, 585: 0.3,
+          586: 7, 587: 4, 588: 0.3,
           604: 1, 605: 0, 606: 0.4, 607: 0.9,
+          620: 1, 621: 1.5,
         },
       },
       {
@@ -202,13 +213,16 @@ export const PRESET_GROUPS = [
     name: "Lead",
     presets: [
       {
-        // Wide synced hoover stack.
+        // Wide synced hoover stack with a fade-in vibrato.
         name: "Hoover Rave",
         set: {
           511: 9, 512: 0.9, 516: 7, 517: 0.45, 518: 0.85, 523: 3, 524: 0.4,
           503: 0.08,
           551: 1, 552: 5000, 553: 0.2,
+          571: 5,
+          580: 2, 581: 2, 582: 0.04,
           604: 1, 605: 0, 606: 0.2, 607: 0.6,
+          612: 0.8,
         },
       },
       {
@@ -233,7 +247,7 @@ export const PRESET_GROUPS = [
         },
       },
       {
-        // Airy glass lead with vibrato.
+        // Airy glass lead with a delayed vibrato.
         name: "Glass Whistle",
         set: {
           511: 22, 512: 0.2, 513: 1,
@@ -241,6 +255,7 @@ export const PRESET_GROUPS = [
           560: 0.05, 563: 0.5,
           571: 5.5,
           580: 2, 581: 2, 582: 0.05,
+          612: 0.6,
         },
       },
       {
@@ -255,7 +270,8 @@ export const PRESET_GROUPS = [
         },
       },
       {
-        // Mono talking lead through the formant filter.
+        // Mono talking lead through the formant filter; RND1 drift keeps
+        // the vowels from sounding mechanical.
         name: "Talk Lead",
         set: {
           501: 1, 503: 0.1,
@@ -263,6 +279,8 @@ export const PRESET_GROUPS = [
           551: 7, 552: 1200, 553: 0.5,
           575: 4,
           580: 3, 581: 1, 582: 0.6,
+          583: 7, 584: 1, 585: 0.2,
+          620: 2, 621: 1,
         },
       },
       {
@@ -314,7 +332,7 @@ export const PRESET_GROUPS = [
     name: "Pad",
     presets: [
       {
-        // Slow choir with vowel drift.
+        // Slow choir with vowel drift that fades in with the swell.
         name: "Choir Dawn",
         set: {
           511: 13, 512: 0.2, 516: 4, 517: 0.2,
@@ -322,6 +340,7 @@ export const PRESET_GROUPS = [
           560: 0.8, 563: 1.5,
           571: 0.1,
           580: 2, 581: 1, 582: 0.25,
+          612: 2,
         },
       },
       {
@@ -336,7 +355,8 @@ export const PRESET_GROUPS = [
         },
       },
       {
-        // String-machine ensemble with a slow pan.
+        // String-machine ensemble with a slow pan and analog-style
+        // tuning drift on RND1.
         name: "Ensemble 74",
         set: {
           511: 27, 512: 0.4, 516: 6, 517: 0.28, 518: 0.9,
@@ -344,6 +364,8 @@ export const PRESET_GROUPS = [
           560: 0.4, 563: 1.2,
           575: 0.3,
           580: 3, 581: 4, 582: 0.4,
+          583: 7, 584: 15, 585: 0.3,
+          620: 2, 621: 0.2,
         },
       },
       {
@@ -380,7 +402,7 @@ export const PRESET_GROUPS = [
         },
       },
       {
-        // Scanned-noise texture pad.
+        // Scanned-noise texture pad, resonance breathing on RND2 drift.
         name: "Static Drift",
         set: {
           511: 30, 512: 0.2,
@@ -389,6 +411,8 @@ export const PRESET_GROUPS = [
           571: 0.05, 575: 0.09,
           580: 2, 581: 1, 582: 0.3,
           583: 3, 584: 9, 585: 0.4,
+          586: 8, 587: 10, 588: 0.3,
+          623: 2, 624: 0.3,
         },
       },
       {
@@ -403,7 +427,7 @@ export const PRESET_GROUPS = [
         },
       },
       {
-        // Soft square, mirrored, warp breathing slowly.
+        // Soft square, mirrored, warp breathing fades in slowly.
         name: "Dark Mirror",
         set: {
           511: 10, 512: 0.3, 523: 4, 524: 0.4,
@@ -411,6 +435,7 @@ export const PRESET_GROUPS = [
           560: 0.7, 563: 1.6,
           575: 0.1,
           580: 3, 581: 12, 582: 0.25,
+          614: 1.5,
         },
       },
       {
@@ -555,7 +580,7 @@ export const PRESET_GROUPS = [
         },
       },
       {
-        // Digital grit stab.
+        // Digital grit stab, per-note cutoff variation on RND2 S&H.
         name: "Grit Pluck",
         set: {
           511: 8, 512: 0.2,
@@ -563,7 +588,9 @@ export const PRESET_GROUPS = [
           561: 0.4, 562: 0, 563: 0.2,
           566: 0.15, 567: 0,
           580: 1, 581: 1, 582: 0.6,
+          583: 8, 584: 9, 585: 0.3,
           604: 1, 605: 4, 606: 0.25, 607: 0.5,
+          623: 0,
         },
       },
       {
@@ -578,7 +605,8 @@ export const PRESET_GROUPS = [
         },
       },
       {
-        // Quantize-warp zap.
+        // Quantize-warp zap; retriggered RND1 S&H picks a fresh timbre
+        // for every note.
         name: "Quant Pluck",
         set: {
           511: 10, 512: 0.8, 523: 6, 524: 0.6,
@@ -586,6 +614,8 @@ export const PRESET_GROUPS = [
           561: 0.4, 562: 0, 563: 0.2,
           566: 0.18, 567: 0,
           580: 1, 581: 12, 582: -0.6,
+          583: 7, 584: 1, 585: 0.3,
+          620: 0,
         },
       },
       {
@@ -614,7 +644,8 @@ export const PRESET_GROUPS = [
     name: "FX",
     presets: [
       {
-        // Slow saw-LFO riser through a high-pass.
+        // One-shot saw riser through a high-pass: each note rises once
+        // and holds at the top.
         name: "Riser Alarm",
         set: {
           511: 2, 512: 0,
@@ -624,30 +655,31 @@ export const PRESET_GROUPS = [
           575: 0.12,
           580: 2, 581: 1, 582: 1,
           583: 3, 584: 9, 585: 0.6,
+          613: 1,
         },
       },
       {
-        // Sample-and-hold vowel babble.
+        // Vowel babble on true random: RND1 S&H picks the vowels.
         name: "Robot Talk",
         set: {
           511: 14, 512: 0.5,
           551: 7, 552: 900, 553: 0.55,
-          570: 4, 571: 6,
           574: 4, 575: 3,
-          580: 2, 581: 1, 582: 1,
+          580: 7, 581: 1, 582: 1,
           583: 3, 584: 9, 585: 0.5,
           604: 1, 605: 1, 606: 0.4, 607: 0.8,
+          620: 0, 621: 6,
         },
       },
       {
-        // Crushed noise bursts.
+        // Crushed noise bursts driven by true random cutoff jumps.
         name: "Static Storm",
         set: {
           511: 30, 512: 1,
           551: 3, 552: 1500, 553: 0.7,
-          570: 4, 571: 12,
-          580: 2, 581: 9, 582: 0.8,
+          580: 7, 581: 9, 582: 0.8,
           604: 1, 605: 4, 606: 0.6, 607: 0.9,
+          620: 0, 621: 12,
         },
       },
       {
@@ -661,7 +693,7 @@ export const PRESET_GROUPS = [
         },
       },
       {
-        // Slow pitch/pan fly-by.
+        // Slow pitch/pan fly-by with a natural pitch waver.
         name: "Doppler Pass",
         set: {
           511: 27, 512: 0.5,
@@ -672,10 +704,12 @@ export const PRESET_GROUPS = [
           580: 2, 581: 2, 582: 0.35,
           583: 3, 584: 4, 585: 1,
           586: 2, 587: 9, 588: 0.4,
+          589: 7, 590: 2, 591: 0.1,
+          620: 2, 621: 0.15,
         },
       },
       {
-        // Square-LFO chopped glitch.
+        // Square-LFO chopped glitch with random pitch jumps.
         name: "Glitch Gate",
         set: {
           511: 16, 512: 0.6,
@@ -684,11 +718,14 @@ export const PRESET_GROUPS = [
           574: 4, 575: 4,
           580: 2, 581: 3, 582: -1,
           583: 3, 584: 1, 585: 0.8,
+          586: 7, 587: 2, 588: 0.5,
           604: 1, 605: 4, 606: 0.5, 607: 0.8,
+          620: 0, 621: 8,
         },
       },
       {
-        // Detuned low choir wash.
+        // Detuned low choir wash that materializes late (env delay) with
+        // a slowly fading vowel drift.
         name: "Ghost Choir",
         set: {
           511: 13, 512: 0.6, 513: -1, 516: 5, 517: 0.3,
@@ -697,10 +734,11 @@ export const PRESET_GROUPS = [
           571: 0.07,
           580: 2, 581: 1, 582: 0.6,
           604: 1, 605: 3, 606: 0.3, 607: 0.5,
+          608: 0.4, 612: 2,
         },
       },
       {
-        // Sub-octave FM rumble drone.
+        // Sub-octave FM rumble drone, Lorenz chaos working the filter.
         name: "Engine Room",
         set: {
           511: 21, 512: 0.5, 513: -2, 523: 7, 524: 0.6,
@@ -709,6 +747,8 @@ export const PRESET_GROUPS = [
           560: 0.6, 562: 1, 563: 1,
           571: 0.5,
           580: 2, 581: 12, 582: 0.3,
+          583: 8, 584: 9, 585: 0.3,
+          623: 3, 624: 0.8,
         },
       },
     ],
