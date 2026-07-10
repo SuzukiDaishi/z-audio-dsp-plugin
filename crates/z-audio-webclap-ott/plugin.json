@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.ott",
+  "name": "Z Audio OTT",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "OTT-style 3-band upward/downward compressor with Linkwitz-Riley crossovers, depth/time scaling and per-band gains.",
+  "features": ["audio-effect", "compressor", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_ott.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 700, "height": 420 },
+    "expanded_size": { "width": 900, "height": 580 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.ott",
+      "name": "Z Audio OTT",
+      "features": ["audio-effect", "compressor", "stereo"],
+      "has_ui": true
+    }
+  ]
+}

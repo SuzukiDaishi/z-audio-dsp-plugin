@@ -133,7 +133,10 @@ const RND_MODES = ["S&H", "Smooth", "Drift", "Chaos"];
 // full, so these live in the append-only 608+ range).
 const ENV_EXTRA = { 560: { delay: 608, hold: 609 }, 565: { delay: 610, hold: 611 } };
 const LFO_EXTRA = { 570: { fade: 612, oneShot: 613 }, 574: { fade: 614, oneShot: 615 } };
-const MOD_SOURCES = ["None", "Env 2", "LFO 1", "LFO 2", "Velocity", "Note", "Env 1", "Rnd 1", "Rnd 2"];
+const MOD_SOURCES = [
+  "None", "Env 2", "LFO 1", "LFO 2", "Velocity", "Note", "Env 1", "Rnd 1", "Rnd 2",
+  "Macro 1", "Macro 2", "Macro 3", "Macro 4",
+];
 const MOD_COLORS = [
   "#7e93a3", // none (unused)
   "#ff8a5c", // env 2
@@ -144,6 +147,10 @@ const MOD_COLORS = [
   "#f6c945", // env 1
   "#5cffc4", // rnd 1
   "#ffb45c", // rnd 2
+  "#7cc4ff", // macro 1
+  "#e08aff", // macro 2
+  "#8affa0", // macro 3
+  "#ffd45c", // macro 4
 ];
 const MOD_DESTS = [
   "None",
@@ -334,6 +341,12 @@ function liveModValue(src) {
       return state.rnd1;
     case 8:
       return state.rnd2;
+    // Macros are unmodulated params — their live value IS the knob value.
+    case 9:
+    case 10:
+    case 11:
+    case 12:
+      return val(626 + (src - 9));
     default:
       return null;
   }
@@ -1051,6 +1064,22 @@ $id("note-knobs").append(
     small: true,
   }),
 );
+
+// --- Macros (Vital-style performance knobs, sources 9-12) -----------------------
+
+for (let m = 0; m < 4; m++) {
+  $id(`macro${m + 1}-knob`).append(
+    makeKnob({
+      id: 626 + m,
+      label: `Macro ${m + 1}`,
+      min: 0,
+      max: 1,
+      default: 0,
+      fmt: fmt.pct,
+      small: true,
+    }),
+  );
+}
 
 $id("master-mount").append(
   makeKnob({ id: P.MASTER, label: "Master", min: 0, max: 1, default: 0.8, fmt: fmt.pct, dest: 11 }),

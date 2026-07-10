@@ -106,6 +106,7 @@ pub fn param_value(p: &SynthParams, id: u32) -> f64 {
         P_VEL_CURVE => p.vel_curve,
         P_NOTE_CENTER => p.note_center as f32,
         P_NOTE_RANGE => p.note_range as f32,
+        id if (P_MACRO1..=P_MACRO4).contains(&id) => p.macros[(id - P_MACRO1) as usize],
         id if (RND1_BASE..RND1_BASE + RND_FIELDS).contains(&id)
             || (RND2_BASE..RND2_BASE + RND_FIELDS).contains(&id) =>
         {
@@ -228,6 +229,9 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
         P_VEL_CURVE => p.vel_curve = v.clamp(-1.0, 1.0),
         P_NOTE_CENTER => p.note_center = v.clamp(0.0, 127.0).round() as u8,
         P_NOTE_RANGE => p.note_range = v.clamp(1.0, 64.0).round() as u8,
+        id if (P_MACRO1..=P_MACRO4).contains(&id) => {
+            p.macros[(id - P_MACRO1) as usize] = v.clamp(0.0, 1.0)
+        }
         id if (RND1_BASE..RND1_BASE + RND_FIELDS).contains(&id)
             || (RND2_BASE..RND2_BASE + RND_FIELDS).contains(&id) =>
         {
@@ -766,11 +770,10 @@ mod tests {
         for d in 0..DIST_MODE_COUNT as i64 {
             assert!(dists.contains(&d), "no preset uses dist mode {d}");
         }
-        let sources = collect(&[
-            MOD_BASE + MOD_SOURCE,
-            MOD_BASE + 3 + MOD_SOURCE,
-            MOD_BASE + 6 + MOD_SOURCE,
-        ]);
+        let source_ids: Vec<u32> = (0..MOD_SLOTS)
+            .map(|s| MOD_BASE + s * MOD_FIELDS + MOD_SOURCE)
+            .collect();
+        let sources = collect(&source_ids);
         for s in 1..SRC_COUNT as i64 {
             assert!(sources.contains(&s), "no preset uses mod source {s}");
         }

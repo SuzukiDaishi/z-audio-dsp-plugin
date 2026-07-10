@@ -778,6 +778,20 @@ main {
   width: 100%;
 }
 
+.macro-row {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 8px;
+}
+
+.macro-tile {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .rnd-viz {
   max-height: 110px;
 }

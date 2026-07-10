@@ -145,6 +145,14 @@ pub const RND_DRIFT: u8 = 2;
 pub const RND_CHAOS: u8 = 3;
 pub const RND_MODE_COUNT: usize = 4;
 
+/// Macro knobs (Vital-style): plain 0-1 values that act as mod sources,
+/// so one performance knob can drive many destinations at once.
+pub const P_MACRO1: u32 = 626;
+pub const P_MACRO2: u32 = 627;
+pub const P_MACRO3: u32 = 628;
+pub const P_MACRO4: u32 = 629;
+pub const MACRO_COUNT: usize = 4;
+
 /// Mod matrix: 8 slots × (source, dest, amount) starting at 580.
 pub const MOD_BASE: u32 = 580;
 pub const MOD_SLOTS: u32 = 8;
@@ -165,7 +173,11 @@ pub const SRC_NOTE: usize = 5;
 pub const SRC_ENV1: usize = 6;
 pub const SRC_RND1: usize = 7;
 pub const SRC_RND2: usize = 8;
-pub const SRC_COUNT: usize = 9;
+pub const SRC_MACRO1: usize = 9;
+pub const SRC_MACRO2: usize = 10;
+pub const SRC_MACRO3: usize = 11;
+pub const SRC_MACRO4: usize = 12;
+pub const SRC_COUNT: usize = 13;
 
 /// Mod destinations, in stepped-parameter order.
 pub const DST_NONE: usize = 0;
@@ -449,6 +461,11 @@ pub fn param_defs() -> Vec<ParamDef> {
         defs.push(def(base + RND_RATE, names[1], 0.01, 50.0, 2.0, false));
         defs.push(def(base + RND_RETRIG, names[2], 0.0, 1.0, 1.0, true));
     }
+
+    defs.push(def(P_MACRO1, b"Macro 1\0", 0.0, 1.0, 0.0, false));
+    defs.push(def(P_MACRO2, b"Macro 2\0", 0.0, 1.0, 0.0, false));
+    defs.push(def(P_MACRO3, b"Macro 3\0", 0.0, 1.0, 0.0, false));
+    defs.push(def(P_MACRO4, b"Macro 4\0", 0.0, 1.0, 0.0, false));
     defs
 }
 
@@ -461,11 +478,11 @@ mod tests {
         let defs = param_defs();
         assert_eq!(
             defs.len(),
-            4 + 15 * 2 + 9 + 5 * 2 + 4 * 2 + 24 + 4 + 4 + 4 + 3 + 3 * 2
+            4 + 15 * 2 + 9 + 5 * 2 + 4 * 2 + 24 + 4 + 4 + 4 + 3 + 3 * 2 + 4
         );
         let mut seen = std::collections::HashSet::new();
         for def in &defs {
-            assert!((500..=625).contains(&def.id), "id {} out of block", def.id);
+            assert!((500..=629).contains(&def.id), "id {} out of block", def.id);
             assert!(seen.insert(def.id), "duplicate id {}", def.id);
             assert!(def.min < def.max);
             assert!(def.default >= def.min && def.default <= def.max);

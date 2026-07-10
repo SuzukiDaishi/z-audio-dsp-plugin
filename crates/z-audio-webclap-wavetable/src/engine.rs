@@ -181,6 +181,8 @@ pub struct SynthParams {
     /// Note mod-source mapping: `((key - center) / range).clamp(-1, 1)`.
     pub note_center: u8,
     pub note_range: u8,
+    /// Vital-style macro knobs — plain 0-1 values exposed as mod sources.
+    pub macros: [f32; MACRO_COUNT],
 }
 
 impl Default for SynthParams {
@@ -215,6 +217,7 @@ impl Default for SynthParams {
             vel_curve: 0.0,
             note_center: 60,
             note_range: 32,
+            macros: [0.0; MACRO_COUNT],
         }
     }
 }
@@ -1358,6 +1361,7 @@ impl SynthEngine {
                     SRC_NOTE => note_src,
                     SRC_RND1 => rnd1,
                     SRC_RND2 => rnd2,
+                    s @ SRC_MACRO1..=SRC_MACRO4 => p.macros[s - SRC_MACRO1],
                     _ => continue,
                 };
                 let x = slot.amount * src;
@@ -2446,6 +2450,32 @@ mod tests {
             .sum::<f32>()
             / without.len() as f32;
         assert!(diff > 1.0e-4, "random source must alter the render");
+    }
+
+    #[test]
+    fn macro_source_drives_the_matrix() {
+        let peak_with_macro = |value: f32| {
+            let mut e = engine();
+            let mut p = *e.params();
+            p.filter_enable = false;
+            p.macros[0] = value;
+            // Full macro pulls the default 0.75 level down to silence.
+            p.mods[0] = ModSlot {
+                source: SRC_MACRO1 as u8,
+                dest: DST_A_LEVEL as u8,
+                amount: -0.75,
+            };
+            e.set_params(p);
+            e.note_on(60, 1.0);
+            let _ = render_seconds(&mut e, 0.05);
+            let (l, _) = render_seconds(&mut e, 0.1);
+            peak(&l)
+        };
+        assert!(peak_with_macro(0.0) > 0.05, "macro at 0 must be inert");
+        assert!(
+            peak_with_macro(1.0) < 0.02,
+            "macro at 1 must apply its full amount"
+        );
     }
 
     #[test]

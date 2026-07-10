@@ -5041,11 +5041,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-webclap-hyperdim"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
 name = "z-audio-webclap-limiter"
 version = "0.1.0"
 dependencies = [
  "wclap-plugin",
  "z-audio-dsp",
+]
+
+[[package]]
+name = "z-audio-webclap-ott"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
 ]
 
 [[package]]

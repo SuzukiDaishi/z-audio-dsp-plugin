@@ -1,0 +1,13 @@
+[package]
+name = "z-audio-webclap-ott"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+description = "OTT-style 3-band upward/downward compressor, packaged as a WCLAP plugin."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wclap-plugin = { path = "../wclap-plugin", default-features = false }
