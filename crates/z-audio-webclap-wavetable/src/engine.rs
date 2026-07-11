@@ -1142,8 +1142,7 @@ impl SynthEngine {
             rnd1: self.free_rnd1.value(&p.rnd1),
             rnd2: self.free_rnd2.value(&p.rnd2),
             velocity: self.last_velocity,
-            note: ((self.last_key as f32 - p.note_center as f32)
-                / p.note_range.max(1) as f32)
+            note: ((self.last_key as f32 - p.note_center as f32) / p.note_range.max(1) as f32)
                 .clamp(-1.0, 1.0),
         }
     }
@@ -1339,8 +1338,7 @@ impl SynthEngine {
             } else {
                 voice.velocity.powf((3.0 * p.vel_curve).exp2())
             };
-            let note_src = ((voice.key as f32 - p.note_center as f32)
-                / p.note_range.max(1) as f32)
+            let note_src = ((voice.key as f32 - p.note_center as f32) / p.note_range.max(1) as f32)
                 .clamp(-1.0, 1.0);
 
             // Mod matrix.
@@ -1447,7 +1445,11 @@ impl SynthEngine {
             let (comb_delay, comb_fb, comb_comp) = if is_comb {
                 let d = (self.sample_rate / cutoff.max(20.0)).clamp(2.0, (comb_len - 2) as f32);
                 let mag = 0.50 + 0.48 * reso;
-                let fb = if p.filter_type == FT_COMB_M { -mag } else { mag };
+                let fb = if p.filter_type == FT_COMB_M {
+                    -mag
+                } else {
+                    mag
+                };
                 (d, fb, 1.0 - 0.5 * mag)
             } else {
                 (0.0, 0.0, 1.0)
@@ -1455,8 +1457,7 @@ impl SynthEngine {
             // Formant: the cutoff knob's log position picks the vowel
             // (200 Hz = "a" … 4 kHz = "u"), three parallel band-passes.
             let formant_coeffs = if p.filter_type == FT_FORMANT {
-                let t = (cutoff.max(1.0).ln() - 200.0f32.ln())
-                    / (4000.0f32.ln() - 200.0f32.ln());
+                let t = (cutoff.max(1.0).ln() - 200.0f32.ln()) / (4000.0f32.ln() - 200.0f32.ln());
                 let (freqs, _bws) = crate::wavetable::vowel_at(t.clamp(0.0, 1.0));
                 [
                     SvfCoeffs::compute(freqs[0], reso, self.sample_rate),
@@ -2087,9 +2088,16 @@ mod tests {
         // A silent-but-enabled osc B drives FM…
         let flat = render(true, 0.0);
         let modulated = render(true, 0.8);
-        let diff: f32 =
-            flat.iter().zip(&modulated).map(|(a, b)| (a - b).abs()).sum::<f32>() / flat.len() as f32;
-        assert!(diff > 1.0e-4, "FM from a silent osc B must alter the signal");
+        let diff: f32 = flat
+            .iter()
+            .zip(&modulated)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
+            / flat.len() as f32;
+        assert!(
+            diff > 1.0e-4,
+            "FM from a silent osc B must alter the signal"
+        );
         // …while a disabled osc B leaves the tap at zero (no-op).
         assert_eq!(render(false, 0.0), render(false, 0.8));
     }

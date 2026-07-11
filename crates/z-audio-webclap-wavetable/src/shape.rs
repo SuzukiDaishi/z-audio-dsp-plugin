@@ -167,7 +167,8 @@ mod tests {
     fn antiderivatives_match_the_shapers() {
         // Central difference of each F must reproduce f everywhere,
         // including across the clamp/fold boundaries.
-        let pairs: [(fn(f32) -> f32, fn(f32) -> f64); 4] = [
+        type Pair = (fn(f32) -> f32, fn(f32) -> f64);
+        let pairs: [Pair; 4] = [
             (soft_clip, soft_clip_ad),
             (hard_clip, hard_ad),
             (fold, fold_ad),

@@ -210,6 +210,40 @@ export const PRESET_GROUPS = [
           604: 1, 605: 2, 606: 0.35, 607: 0.6,
         },
       },
+      {
+        // Deep clean sub: anti-aliased filter drive adds weight without
+        // fizz; Env2 leans the morph into the saturated frames.
+        name: "Deep Focus",
+        set: {
+          511: 31, 512: 0.45, 513: -1,
+          551: 1, 552: 320, 553: 0.1, 554: 0.5,
+          565: 0.002, 566: 0.3, 567: 0.2,
+          580: 1, 581: 1, 582: 0.35,
+        },
+      },
+      {
+        // Dark detuned reese riding the smooth fractional-mip blend;
+        // half-mix tanh bus for glue.
+        name: "Velvet Reese",
+        set: {
+          512: 0.5, 513: -1, 516: 6, 517: 0.3, 518: 0.85,
+          551: 1, 552: 450, 553: 0.2, 554: 0.35,
+          580: 1, 581: 1, 582: 0.4,
+          604: 1, 605: 0, 606: 0.35, 607: 0.5,
+        },
+      },
+      {
+        // Punchy FM bass through the anti-aliased wavefolder — the DC
+        // blocker keeps the low end centered under heavy fold.
+        name: "Fold Knuckle",
+        set: {
+          511: 20, 512: 0.3, 513: -1,
+          551: 0, 552: 900, 553: 0.2,
+          565: 0.002, 566: 0.25, 567: 0,
+          580: 1, 581: 1, 582: 0.6,
+          604: 1, 605: 2, 606: 0.45, 607: 0.85,
+        },
+      },
     ],
   },
   {

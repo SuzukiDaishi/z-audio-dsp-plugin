@@ -958,8 +958,7 @@ fn string_machine(morph: f32) -> Recipe {
     for h in 1..=512.min(MAX_HARMONICS) {
         let hf = h as f32;
         let comb = 0.55
-            + 0.45
-                * (core::f32::consts::TAU * hf / 9.0 + core::f32::consts::TAU * morph).cos();
+            + 0.45 * (core::f32::consts::TAU * hf / 9.0 + core::f32::consts::TAU * morph).cos();
         let a = comb / hf.powf(p);
         r.sin_amp[h - 1] = a;
         r.cos_amp[h - 1] = 0.2 * a * (core::f32::consts::TAU * hash01(h as u32 * 3)).sin();
