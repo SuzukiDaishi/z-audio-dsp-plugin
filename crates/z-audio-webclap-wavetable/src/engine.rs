@@ -1010,6 +1010,10 @@ pub struct SynthEngine {
     /// ADAA state for the shaper distortion modes on the master bus.
     dist_adaa_l: Adaa1,
     dist_adaa_r: Adaa1,
+    /// One-pole DC blocker after the shaper distortion (fold/sine on
+    /// asymmetric material produce DC that muddies the low end).
+    dc_x1: (f32, f32),
+    dc_y1: (f32, f32),
 }
 
 /// One frame of live modulation values for the UI meter packet.
@@ -1051,6 +1055,8 @@ impl SynthEngine {
             decim_hold: (0.0, 0.0),
             dist_adaa_l: Adaa1::default(),
             dist_adaa_r: Adaa1::default(),
+            dc_x1: (0.0, 0.0),
+            dc_y1: (0.0, 0.0),
         };
         e.resize_combs();
         e
@@ -1111,6 +1117,8 @@ impl SynthEngine {
         }
         self.dist_adaa_l.reset();
         self.dist_adaa_r.reset();
+        self.dc_x1 = (0.0, 0.0);
+        self.dc_y1 = (0.0, 0.0);
     }
 
     pub fn active_voices(&self) -> usize {
@@ -1651,11 +1659,26 @@ impl SynthEngine {
                     right[i] += (self.decim_hold.1 - right[i]) * mix;
                 }
             } else {
+                // The 6 Hz DC blocker rides only the active shaper path
+                // (gated on mix > 0 so mix-0 stays exactly transparent):
+                // fold/sine on asymmetric material generate DC that would
+                // otherwise lean the low end.
+                let dc_r = 1.0 - core::f32::consts::TAU * 6.0 * self.inv_sample_rate;
                 for i in 0..n {
                     let y_l = self.dist_adaa_l.distort(p.dist_mode, left[i] * gain) * comp;
                     let y_r = self.dist_adaa_r.distort(p.dist_mode, right[i] * gain) * comp;
                     left[i] += (y_l - left[i]) * mix;
                     right[i] += (y_r - right[i]) * mix;
+                    if mix > 0.0 {
+                        let hp_l = left[i] - self.dc_x1.0 + dc_r * self.dc_y1.0;
+                        self.dc_x1.0 = left[i];
+                        self.dc_y1.0 = flush_denormal(hp_l);
+                        left[i] = hp_l;
+                        let hp_r = right[i] - self.dc_x1.1 + dc_r * self.dc_y1.1;
+                        self.dc_x1.1 = right[i];
+                        self.dc_y1.1 = flush_denormal(hp_r);
+                        right[i] = hp_r;
+                    }
                 }
             }
         }
@@ -2176,6 +2199,67 @@ mod tests {
         assert!(
             wet > dry * 5.0,
             "formant must emphasize F1 over the far band: dry={dry} wet={wet}"
+        );
+    }
+
+    #[test]
+    fn shaper_distortion_leaves_no_dc() {
+        // Hard-clipping the asymmetric 12.5% pulse (spends 1/8 of the
+        // cycle at the positive rail, 7/8 at the negative one) rectifies
+        // it into a strong negative offset; the post-shaper DC blocker
+        // must remove it.
+        let mut e = engine();
+        let mut p = *e.params();
+        p.osc_a.wt_pos = 1.0; // pulse frame
+        p.osc_a.rand_phase = 0.0;
+        p.filter_enable = false;
+        p.env1.attack_s = 0.0;
+        p.dist_enable = true;
+        p.dist_mode = DIST_HARD;
+        p.dist_drive = 1.0;
+        p.dist_mix = 1.0;
+        e.set_params(p);
+        e.note_on(45, 1.0);
+        let _ = render_seconds(&mut e, 0.5); // settle the blocker
+        let (l, _r) = render_seconds(&mut e, 0.5);
+        let mean = l.iter().map(|&v| v as f64).sum::<f64>() / l.len() as f64;
+        assert!(peak(&l) > 0.1, "the note must be audible");
+        assert!(mean.abs() < 1.0e-3, "post-distortion DC offset: {mean}");
+    }
+
+    #[test]
+    fn fold_bass_alias_is_bounded() {
+        // A pure sine at ~2217 Hz through the wavefolder at full drive
+        // (the signal folds ~3 times — worst case): the folded image of
+        // the 13th harmonic lands at ~19.2 kHz. First-order ADAA holds it
+        // near -18 dB (measured 0.126); this guards against regressing to
+        // the naive shaper, which leaves substantially more.
+        let mut e = engine();
+        let mut p = *e.params();
+        p.osc_a.wt_pos = 0.0; // sine frame
+        p.osc_a.rand_phase = 0.0;
+        p.osc_a.uni_detune = 0.0;
+        p.filter_enable = false;
+        p.env1.attack_s = 0.0;
+        p.dist_enable = true;
+        p.dist_mode = DIST_FOLD;
+        p.dist_drive = 1.0;
+        p.dist_mix = 1.0;
+        e.set_params(p);
+        e.note_on(97, 1.0); // ≈ 2217 Hz
+        let frames = 16_384;
+        let mut l = vec![0.0f32; frames];
+        let mut r = vec![0.0f32; frames];
+        e.render(&mut l, &mut r);
+        e.render(&mut l, &mut r);
+        let f0 = 440.0 * ((97.0f64 - 69.0) / 12.0).exp2();
+        let fundamental = goertzel(&l, f0);
+        let alias = goertzel(&l, 48_000.0 - 13.0 * f0);
+        assert!(fundamental > 0.0);
+        assert!(
+            alias < fundamental * 0.3,
+            "fold alias/fund = {}",
+            alias / fundamental
         );
     }
 
