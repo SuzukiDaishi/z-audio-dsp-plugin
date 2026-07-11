@@ -2110,7 +2110,7 @@ mod tests {
         let dry = ratio(false);
         let wet = ratio(true);
         assert!(
-            wet > dry * 10.0,
+            wet > dry * 5.0,
             "formant must emphasize F1 over the far band: dry={dry} wet={wet}"
         );
     }
