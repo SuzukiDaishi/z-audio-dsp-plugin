@@ -21,6 +21,7 @@
 pub mod engine;
 pub mod params;
 pub mod protocol;
+pub mod shape;
 pub mod wavetable;
 
 use std::sync::OnceLock;

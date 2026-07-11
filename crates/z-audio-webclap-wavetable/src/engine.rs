@@ -13,6 +13,7 @@
 //! synth), so renders are deterministic and unit-testable.
 
 use crate::params::*;
+use crate::shape::{soft_clip, Adaa1};
 use crate::wavetable::{WavetableSet, MAX_HARMONICS, MIPS};
 use z_audio_dsp::flush_denormal;
 
@@ -712,14 +713,6 @@ impl SvfState {
     }
 }
 
-/// Cheap tanh-shaped saturator for the filter drive.
-#[inline]
-fn soft_clip(x: f32) -> f32 {
-    let x = x.clamp(-3.0, 3.0);
-    let x2 = x * x;
-    x * (27.0 + x2) / (27.0 + 9.0 * x2)
-}
-
 // ---------------------------------------------------------------------------
 // Oscillator warp (Serum-style)
 // ---------------------------------------------------------------------------
@@ -790,27 +783,6 @@ impl WarpKernel {
             W_AM => (1.0 + self.a * other) / (1.0 + self.a),
             _ => 1.0,
         }
-    }
-}
-
-/// One distortion transfer function on a pre-gained sample. Crush is
-/// handled separately (it needs the sample-hold state).
-#[inline]
-fn distort(mode: u8, x: f32) -> f32 {
-    match mode {
-        DIST_HARD => x.clamp(-1.0, 1.0),
-        DIST_FOLD => {
-            // Triangle foldback: identity in [-1,1], reflects beyond.
-            let g = x - 4.0 * ((x + 2.0) * 0.25).floor();
-            if g.abs() > 1.0 {
-                g.signum() * (2.0 - g.abs())
-            } else {
-                g
-            }
-        }
-        // Master bus only, so a real sin() per sample is affordable.
-        DIST_SINE => (core::f32::consts::FRAC_PI_2 * x.clamp(-3.0, 3.0)).sin(),
-        _ => soft_clip(x),
     }
 }
 
@@ -947,6 +919,9 @@ struct Voice {
     comb_l: Vec<f32>,
     comb_r: Vec<f32>,
     comb_pos: usize,
+    /// ADAA state for the filter-drive saturator.
+    drive_adaa_l: Adaa1,
+    drive_adaa_r: Adaa1,
 }
 
 impl Voice {
@@ -978,6 +953,8 @@ impl Voice {
             comb_l: Vec::new(),
             comb_r: Vec::new(),
             comb_pos: 0,
+            drive_adaa_l: Adaa1::default(),
+            drive_adaa_r: Adaa1::default(),
         }
     }
 }
@@ -1030,6 +1007,9 @@ pub struct SynthEngine {
     /// Sample-hold state for the Crush distortion mode.
     decim_counter: u32,
     decim_hold: (f32, f32),
+    /// ADAA state for the shaper distortion modes on the master bus.
+    dist_adaa_l: Adaa1,
+    dist_adaa_r: Adaa1,
 }
 
 /// One frame of live modulation values for the UI meter packet.
@@ -1069,6 +1049,8 @@ impl SynthEngine {
             master_smooth: 0.8,
             decim_counter: 0,
             decim_hold: (0.0, 0.0),
+            dist_adaa_l: Adaa1::default(),
+            dist_adaa_r: Adaa1::default(),
         };
         e.resize_combs();
         e
@@ -1124,7 +1106,11 @@ impl SynthEngine {
             v.comb_pos = 0;
             v.fm_a_prev = 0.0;
             v.fm_b_prev = 0.0;
+            v.drive_adaa_l.reset();
+            v.drive_adaa_r.reset();
         }
+        self.dist_adaa_l.reset();
+        self.dist_adaa_r.reset();
     }
 
     pub fn active_voices(&self) -> usize {
@@ -1253,10 +1239,13 @@ impl SynthEngine {
         v.osc_b.trigger(&self.params.osc_b, &mut rng);
         v.fm_a_prev = 0.0;
         v.fm_b_prev = 0.0;
-        // Stolen voices must not ring with the previous note's comb tail.
+        // Stolen voices must not ring with the previous note's comb tail,
+        // and a stale ADAA x1 would spike the first drive sample.
         v.comb_l.fill(0.0);
         v.comb_r.fill(0.0);
         v.comb_pos = 0;
+        v.drive_adaa_l.reset();
+        v.drive_adaa_r.reset();
     }
 
     pub fn note_off(&mut self, key: u8) {
@@ -1542,8 +1531,20 @@ impl SynthEngine {
 
                 let (mut out_l, mut out_r) = (dry_l, dry_r);
                 if p.filter_enable {
-                    let x_l = soft_clip(wet_l * drive_gain) * drive_comp;
-                    let x_r = soft_clip(wet_r * drive_gain) * drive_comp;
+                    // ADAA keeps the saturator from aliasing; the naive
+                    // path preserves bit-exact renders while drive is 0
+                    // (the clip is transparent there anyway).
+                    let (x_l, x_r) = if p.drive > 0.0 {
+                        (
+                            voice.drive_adaa_l.soft_clip(wet_l * drive_gain) * drive_comp,
+                            voice.drive_adaa_r.soft_clip(wet_r * drive_gain) * drive_comp,
+                        )
+                    } else {
+                        (
+                            soft_clip(wet_l * drive_gain) * drive_comp,
+                            soft_clip(wet_r * drive_gain) * drive_comp,
+                        )
+                    };
                     let (f_l, f_r) = match p.filter_type {
                         FT_LP12 => (
                             voice.svf1_l.tick(x_l, &coeffs).0,
@@ -1651,8 +1652,8 @@ impl SynthEngine {
                 }
             } else {
                 for i in 0..n {
-                    let y_l = distort(p.dist_mode, left[i] * gain) * comp;
-                    let y_r = distort(p.dist_mode, right[i] * gain) * comp;
+                    let y_l = self.dist_adaa_l.distort(p.dist_mode, left[i] * gain) * comp;
+                    let y_r = self.dist_adaa_r.distort(p.dist_mode, right[i] * gain) * comp;
                     left[i] += (y_l - left[i]) * mix;
                     right[i] += (y_r - right[i]) * mix;
                 }
