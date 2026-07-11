@@ -22,6 +22,12 @@ if (typeof ServiceWorkerGlobalScope !== "function") {
 			await Promise.all(registrations.map(r => r.unregister()));
 
 			await serviceWorker.register(scriptUrl || "./page-proxy-service-worker.js", {updateViaCache: 'none'});
+		} else if (scriptUrl) {
+			// Always register the script URL used by this host revision. Previously an
+			// existing controller skipped registration entirely, which let an old proxy
+			// keep serving UI resources after the host had been updated.
+			const registration = await serviceWorker.register(scriptUrl, {updateViaCache: 'none'});
+			await registration.update();
 		}
 		let proxy = {
 			symbol: Symbol("page-proxy"),
@@ -109,7 +115,13 @@ if (typeof ServiceWorkerGlobalScope !== "function") {
 				return new Promise(pass => {
 					requestMap[requestId] = blobOrNull => {
 						if (blobOrNull) {
-							let response = new Response(blobOrNull);
+							let response = new Response(blobOrNull, {
+								headers: {
+									"Cache-Control": "no-store, max-age=0, must-revalidate",
+									"Pragma": "no-cache",
+									"Expires": "0"
+								}
+							});
 							response.headers.set("Access-Control-Allow-Origin", "*");
 							response.headers.set("Cross-Origin-Opener-Policy", "noopener-allow-popups");
 							response.headers.set("Cross-Origin-Embedder-Policy", "credentialless");
