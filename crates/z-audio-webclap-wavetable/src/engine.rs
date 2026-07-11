@@ -1671,12 +1671,19 @@ impl SynthEngine {
     }
 }
 
-/// Pick the mip level whose full harmonic band stays below Nyquist for the
-/// most-detuned unison voice — rounded *up*, so playback is strictly
-/// alias-free (brightness steps at octave boundaries are the accepted
-/// tradeoff for milestone 1; `Wavetable::sample` already supports a
-/// crossfade fraction should a blended scheme land later). `inc` is cycles
-/// per sample of the center voice.
+/// Bias added to the fractional mip level. `floor(level) + frac`
+/// crossfades between the two neighboring mips; the finer one can carry
+/// up to an octave of content above Nyquist near frac ≈ 0, so the guard
+/// shifts the blend darker until the folded band stays attenuated and
+/// confined near Nyquist (see `sync_warp_does_not_alias`).
+const MIP_GUARD: f32 = 0.25;
+
+/// Pick a fractional mip level for the most-detuned unison voice: the
+/// integer part indexes the finer mip, the fraction crossfades toward
+/// the next-coarser one in `Wavetable::sample`. Compared to the old
+/// ceil() pick this removes both the octave-boundary brightness steps
+/// and up to an octave of unnecessary darkening on low notes. `inc` is
+/// cycles per sample of the center voice.
 fn mip_for_increment(inc: f32, p: &OscParams) -> (usize, f32) {
     // Worst-case unison ratio pushes the pitch up by the full spread, and
     // a hot warp widens the spectrum by a few more octaves.
@@ -1686,12 +1693,18 @@ fn mip_for_increment(inc: f32, p: &OscParams) -> (usize, f32) {
     if worst <= 0.0 {
         return (0, 0.0);
     }
-    let allowed = 0.5 / worst;
-    if allowed >= MAX_HARMONICS as f32 {
-        return (0, 0.0);
+    let allowed = (0.5 / worst).max(1.0);
+    // raw <= 0 means even mip 0 is fully alias-free; adding the guard
+    // (instead of early-returning) keeps the level continuous across
+    // that boundary — frac ramps smoothly from 0 as the pitch rises.
+    let raw = (MAX_HARMONICS as f32 / allowed).log2();
+    let level = (raw + MIP_GUARD).clamp(0.0, (MIPS - 1) as f32);
+    let mip = level as usize;
+    if mip >= MIPS - 1 {
+        (MIPS - 1, 0.0)
+    } else {
+        (mip, level - mip as f32)
     }
-    let level = (MAX_HARMONICS as f32 / allowed.max(1.0)).log2().ceil();
-    ((level.max(0.0) as usize).min(MIPS - 1), 0.0)
 }
 
 #[cfg(test)]
@@ -1946,6 +1959,56 @@ mod tests {
             "full sync spans 3 octaves: base {} synced {}",
             base.0,
             synced.0
+        );
+    }
+
+    #[test]
+    fn mip_choice_is_continuous_in_pitch() {
+        // The fractional mip level must never step: sweep four octaves in
+        // 1-cent increments and demand sample-to-sample continuity.
+        let mut p = OscParams::default_with(true);
+        p.uni_detune = 0.0;
+        let mut prev: Option<f32> = None;
+        for cents in 0..4800 {
+            let f = 55.0f32 * (cents as f32 / 1200.0).exp2();
+            let (m, fr) = mip_for_increment(f / 48_000.0, &p);
+            let level = m as f32 + fr;
+            if let Some(pl) = prev {
+                assert!(
+                    (level - pl).abs() < 0.01,
+                    "mip level steps at {cents} cents: {pl} -> {level}"
+                );
+            }
+            prev = Some(level);
+        }
+    }
+
+    #[test]
+    fn low_notes_keep_their_upper_harmonics() {
+        // A1 saw: harmonic 300 (~16.5 kHz) was discarded by the old ceil()
+        // mip pick (mip 2 caps the table at 256 partials); the fractional
+        // pick keeps the mip-1 band audible.
+        let mut e = engine();
+        let mut p = *e.params();
+        p.osc_a.wt_pos = 0.5; // saw region
+        p.osc_a.uni_detune = 0.0;
+        p.osc_a.rand_phase = 0.0;
+        p.filter_enable = false;
+        p.env1.attack_s = 0.0;
+        e.set_params(p);
+        e.note_on(33, 1.0); // A1 = 55 Hz
+        let frames = 16_384;
+        let mut l = vec![0.0f32; frames];
+        let mut r = vec![0.0f32; frames];
+        e.render(&mut l, &mut r);
+        e.render(&mut l, &mut r);
+        let fundamental = goertzel(&l, 55.0);
+        let h300 = goertzel(&l, 55.0 * 300.0);
+        assert!(fundamental > 0.0);
+        assert!(
+            h300 > fundamental * 1.0e-8,
+            "h300/fund = {}",
+            h300 / fundamental
         );
     }
 
