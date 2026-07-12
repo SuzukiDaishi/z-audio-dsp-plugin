@@ -355,12 +355,26 @@ mod tests {
         let (l_first, l_rest) = l.split_at_mut(half);
         let (r_first, r_rest) = r.split_at_mut(half);
         process_smoothed(
-            &mut reverb, &mut sm, params, &mut dirty, &mut snapped, sr, l_first, r_first,
+            &mut reverb,
+            &mut sm,
+            params,
+            &mut dirty,
+            &mut snapped,
+            sr,
+            l_first,
+            r_first,
         );
         params.output_gain_db += 24.0;
         dirty = true;
         process_smoothed(
-            &mut reverb, &mut sm, params, &mut dirty, &mut snapped, sr, l_rest, r_rest,
+            &mut reverb,
+            &mut sm,
+            params,
+            &mut dirty,
+            &mut snapped,
+            sr,
+            l_rest,
+            r_rest,
         );
         // Compare short-window RMS right after the jump against the fully
         // settled level: the first window must still be far below it.

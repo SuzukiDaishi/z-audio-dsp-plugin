@@ -721,7 +721,11 @@ mod tests {
         let mut l = [0.0f32; 4_800];
         let mut r = [0.0f32; 4_800];
         s.render(&mut l, &mut r);
-        assert!(rms(&l) > 0.01, "dev bank note is inaudible (rms {})", rms(&l));
+        assert!(
+            rms(&l) > 0.01,
+            "dev bank note is inaudible (rms {})",
+            rms(&l)
+        );
     }
 
     #[test]

@@ -198,7 +198,8 @@ impl FlangerEngine {
         let inc = p.rate_hz / self.sample_rate;
         // The LFO swings the delay between manual*(1-depth*0.9) and
         // manual*(1+depth*0.9); the right channel runs spread*0.5 cycles late.
-        self.sm_base.set_target(p.manual_ms * 0.001 * self.sample_rate);
+        self.sm_base
+            .set_target(p.manual_ms * 0.001 * self.sample_rate);
         self.sm_swing.set_target(p.depth * 0.9);
         self.sm_spread.set_target(p.spread);
         self.sm_feedback.set_target(p.feedback);
@@ -351,7 +352,12 @@ mod tests {
         let input: Vec<f32> = (0..n).map(|i| (i as f32 * 0.02).sin() * 0.5).collect();
         let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
         let half = n / 2;
-        e.process(&input[..half], &input[..half], &mut l[..half], &mut r[..half]);
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
         let mut p = *e.params();
         p.output_db = 24.0;
         p.manual_ms = 9.0;
@@ -484,10 +490,7 @@ mod tests {
         e.set_params(p);
         let input = noise(96_000, 0.2); // 2 s at 48 kHz
         let (l, r) = render(&mut e, &input);
-        let peak = l
-            .iter()
-            .chain(r.iter())
-            .fold(0.0f32, |m, s| m.max(s.abs()));
+        let peak = l.iter().chain(r.iter()).fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(peak.is_finite() && peak < 4.0, "peak {peak}");
     }
 

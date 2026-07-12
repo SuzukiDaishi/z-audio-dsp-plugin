@@ -410,7 +410,12 @@ mod tests {
         let input: Vec<f32> = (0..n).map(|i| (i as f32 * 0.02).sin() * 0.4).collect();
         let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
         let half = n / 2;
-        e.process(&input[..half], &input[..half], &mut l[..half], &mut r[..half]);
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
         let mut p = *e.params();
         p.output_db = 24.0;
         p.dim_size = 1.0;

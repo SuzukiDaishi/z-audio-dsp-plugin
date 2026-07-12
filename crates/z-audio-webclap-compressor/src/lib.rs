@@ -332,12 +332,26 @@ mod tests {
         let (l_first, l_rest) = l.split_at_mut(half);
         let (r_first, r_rest) = r.split_at_mut(half);
         process_smoothed(
-            &mut comp, &mut sm, params, &mut dirty, &mut snapped, sr, l_first, r_first,
+            &mut comp,
+            &mut sm,
+            params,
+            &mut dirty,
+            &mut snapped,
+            sr,
+            l_first,
+            r_first,
         );
         params.makeup_gain_db += 20.0;
         dirty = true;
         process_smoothed(
-            &mut comp, &mut sm, params, &mut dirty, &mut snapped, sr, l_rest, r_rest,
+            &mut comp,
+            &mut sm,
+            params,
+            &mut dirty,
+            &mut snapped,
+            sr,
+            l_rest,
+            r_rest,
         );
         let rms = |buf: &[f32]| -> f32 {
             (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt()

@@ -80,7 +80,14 @@ pub fn param_defs() -> Vec<ParamDef> {
         def(P_UPWARD, b"Upward\0", 0.0, 1.0, 1.0, false),
         def(P_DOWNWARD, b"Downward\0", 0.0, 1.0, 1.0, false),
         def(P_XOVER_LOW, b"Low X-Over\0", 40.0, 400.0, 120.0, false),
-        def(P_XOVER_HIGH, b"High X-Over\0", 1000.0, 8000.0, 2500.0, false),
+        def(
+            P_XOVER_HIGH,
+            b"High X-Over\0",
+            1000.0,
+            8000.0,
+            2500.0,
+            false,
+        ),
     ]
 }
 
@@ -547,7 +554,12 @@ mod tests {
         let input = sine(n, 200.0, 0.3);
         let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
         let half = n / 2;
-        e.process(&input[..half], &input[..half], &mut l[..half], &mut r[..half]);
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
         let mut p = *e.params();
         p.out_gain_db = 24.0;
         e.set_params(p);

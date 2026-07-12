@@ -217,14 +217,7 @@ impl Coeffs {
         let w0 = angular(fs, f0);
         let (sw, cw) = w0.sin_cos();
         let alpha = sw / (2.0 * q);
-        Self::norm(
-            1.0,
-            -2.0 * cw,
-            1.0,
-            1.0 + alpha,
-            -2.0 * cw,
-            1.0 - alpha,
-        )
+        Self::norm(1.0, -2.0 * cw, 1.0, 1.0 + alpha, -2.0 * cw, 1.0 - alpha)
     }
 
     /// Constant-peak band pass (0 dB at f0), used by the band-solo listen.
@@ -444,7 +437,9 @@ impl BandSmooth {
     }
 
     fn is_settled(&self) -> bool {
-        self.freq_l2.is_settled(1.0e-4) && self.gain_db.is_settled(1.0e-3) && self.q.is_settled(1.0e-4)
+        self.freq_l2.is_settled(1.0e-4)
+            && self.gain_db.is_settled(1.0e-3)
+            && self.q.is_settled(1.0e-4)
     }
 }
 
@@ -587,18 +582,8 @@ impl EqEngine {
         }
     }
 
-    fn process_chunk(
-        &mut self,
-        in_l: &[f32],
-        in_r: &[f32],
-        out_l: &mut [f32],
-        out_r: &mut [f32],
-    ) {
-        let any_solo = self
-            .params
-            .bands
-            .iter()
-            .any(|b| b.enabled && b.solo);
+    fn process_chunk(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
+        let any_solo = self.params.bands.iter().any(|b| b.enabled && b.solo);
 
         for i in 0..out_l.len() {
             let mut l = in_l[i];
@@ -699,8 +684,7 @@ impl SpectrumTap {
     pub fn new() -> Self {
         let mut window = vec![0.0f32; FFT_SIZE];
         for (i, w) in window.iter_mut().enumerate() {
-            *w = 0.5
-                - 0.5 * (core::f32::consts::TAU * i as f32 / (FFT_SIZE as f32 - 1.0)).cos();
+            *w = 0.5 - 0.5 * (core::f32::consts::TAU * i as f32 / (FFT_SIZE as f32 - 1.0)).cos();
         }
         let bits = FFT_SIZE.trailing_zeros();
         let bit_rev = (0..FFT_SIZE)
@@ -835,7 +819,12 @@ mod tests {
         e.set_params(p);
         let half = input.len() / 2;
         let (mut l, mut r) = (vec![0.0; input.len()], vec![0.0; input.len()]);
-        e.process(&input[..half], &input[..half], &mut l[..half], &mut r[..half]);
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
         p.bands[0].gain_db = 18.0;
         e.set_params(p);
         let last = l[half - 1];
