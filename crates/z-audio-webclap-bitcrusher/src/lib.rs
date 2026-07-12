@@ -9,8 +9,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, TAU_GAIN,
 };
 
 pub const P_BITS: u32 = 680;
@@ -96,14 +96,28 @@ pub struct BitcrusherEngine {
     params: BitcrusherParams,
     left: ChannelState,
     right: ChannelState,
+    /// Anti-zipper smoothing: mix/output are gain-like. Bits and
+    /// downsample stay raw — they are the crunch, not a level.
+    sm_mix: Smoothed,
+    sm_out: Smoothed,
+    snapped: bool,
 }
 
 impl BitcrusherEngine {
-    pub fn new(_sample_rate: f32) -> Self {
+    pub fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0);
+        let smoother = |tau: f32| {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sr, tau);
+            s
+        };
         Self {
             params: BitcrusherParams::default(),
             left: ChannelState::default(),
             right: ChannelState::default(),
+            sm_mix: smoother(TAU_GAIN),
+            sm_out: smoother(TAU_GAIN),
+            snapped: false,
         }
     }
 
@@ -118,6 +132,7 @@ impl BitcrusherEngine {
     pub fn reset(&mut self) {
         self.left = ChannelState::default();
         self.right = ChannelState::default();
+        self.snapped = false;
     }
 
     #[inline]
@@ -133,13 +148,21 @@ impl BitcrusherEngine {
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
         let p = self.params;
         let factor = p.downsample.max(1.0);
-        let dry = 1.0 - p.mix;
-        let out_gain = db_to_gain(p.output_db);
+        self.sm_mix.set_target(p.mix);
+        self.sm_out.set_target(db_to_gain(p.output_db));
+        if !self.snapped {
+            self.sm_mix.snap();
+            self.sm_out.snap();
+            self.snapped = true;
+        }
         for i in 0..out_l.len() {
+            let mix = self.sm_mix.tick();
+            let dry = 1.0 - mix;
+            let out_gain = self.sm_out.tick();
             let wet_l = Self::crush(&mut self.left, in_l[i], p.bits, factor);
             let wet_r = Self::crush(&mut self.right, in_r[i], p.bits, factor);
-            out_l[i] = (in_l[i] * dry + wet_l * p.mix) * out_gain;
-            out_r[i] = (in_r[i] * dry + wet_r * p.mix) * out_gain;
+            out_l[i] = (in_l[i] * dry + wet_l * mix) * out_gain;
+            out_r[i] = (in_r[i] * dry + wet_r * mix) * out_gain;
         }
     }
 }
@@ -220,6 +243,46 @@ pub extern "C" fn _initialize() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_gain_jump_is_smoothed() {
+        // Jump output +24 dB and mix mid-render: the output must glide,
+        // not step.
+        let mut e = BitcrusherEngine::new(48_000.0);
+        let n = 9_600;
+        let input: Vec<f32> = (0..n).map(|i| (i as f32 * 0.02).sin() * 0.5).collect();
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
+        let mut p = *e.params();
+        p.output_db = 24.0;
+        p.mix = 0.5;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        // The transition region must never step harder than the post-jump
+        // steady signal itself moves (unsmoothed, the boundary step is the
+        // full +24 dB jump in one sample).
+        let settle = 2_000; // ~40 ms >> every tau involved
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
+    }
 
     #[test]
     fn param_defs_are_well_formed() {

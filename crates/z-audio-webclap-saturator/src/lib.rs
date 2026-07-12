@@ -9,8 +9,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, TAU_GAIN,
 };
 
 pub const P_DRIVE: u32 = 660;
@@ -120,15 +120,37 @@ pub struct SaturatorEngine {
     sample_rate: f32,
     left: ChannelState,
     right: ChannelState,
+    /// Anti-zipper smoothing: drive/warmth/tilt gains/mix/output are all
+    /// gain-like.
+    sm_drive: Smoothed,
+    sm_warmth: Smoothed,
+    sm_low_gain: Smoothed,
+    sm_high_gain: Smoothed,
+    sm_mix: Smoothed,
+    sm_out: Smoothed,
+    snapped: bool,
 }
 
 impl SaturatorEngine {
     pub fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0);
+        let smoother = |tau: f32| {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sr, tau);
+            s
+        };
         Self {
             params: SaturatorParams::default(),
-            sample_rate: sample_rate.max(1.0),
+            sample_rate: sr,
             left: ChannelState::default(),
             right: ChannelState::default(),
+            sm_drive: smoother(TAU_GAIN),
+            sm_warmth: smoother(TAU_GAIN),
+            sm_low_gain: smoother(TAU_GAIN),
+            sm_high_gain: smoother(TAU_GAIN),
+            sm_mix: smoother(TAU_GAIN),
+            sm_out: smoother(TAU_GAIN),
+            snapped: false,
         }
     }
 
@@ -143,26 +165,44 @@ impl SaturatorEngine {
     pub fn reset(&mut self) {
         self.left = ChannelState::default();
         self.right = ChannelState::default();
+        self.snapped = false;
     }
 
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
         let p = self.params;
-        let g = db_to_gain(p.drive_db).max(1.0);
-        let out_gain = db_to_gain(p.output_db);
-        let dry = 1.0 - p.mix;
         // Tilt pivot at 800 Hz, ±6 dB swing at the extremes.
         let lp_a = 1.0 - (-core::f32::consts::TAU * 800.0 / self.sample_rate).exp();
-        let low_gain = db_to_gain(-6.0 * p.tone);
-        let high_gain = db_to_gain(6.0 * p.tone);
+        self.sm_drive.set_target(db_to_gain(p.drive_db));
+        self.sm_warmth.set_target(p.warmth);
+        self.sm_low_gain.set_target(db_to_gain(-6.0 * p.tone));
+        self.sm_high_gain.set_target(db_to_gain(6.0 * p.tone));
+        self.sm_mix.set_target(p.mix);
+        self.sm_out.set_target(db_to_gain(p.output_db));
+        if !self.snapped {
+            self.sm_drive.snap();
+            self.sm_warmth.snap();
+            self.sm_low_gain.snap();
+            self.sm_high_gain.snap();
+            self.sm_mix.snap();
+            self.sm_out.snap();
+            self.snapped = true;
+        }
         for i in 0..out_l.len() {
+            let g = self.sm_drive.tick().max(1.0);
+            let warmth = self.sm_warmth.tick();
+            let low_gain = self.sm_low_gain.tick();
+            let high_gain = self.sm_high_gain.tick();
+            let mix = self.sm_mix.tick();
+            let dry = 1.0 - mix;
+            let out_gain = self.sm_out.tick();
             let wet_l = self
                 .left
-                .tick(saturate(g, p.warmth, in_l[i]), lp_a, low_gain, high_gain);
+                .tick(saturate(g, warmth, in_l[i]), lp_a, low_gain, high_gain);
             let wet_r = self
                 .right
-                .tick(saturate(g, p.warmth, in_r[i]), lp_a, low_gain, high_gain);
-            out_l[i] = (in_l[i] * dry + wet_l * p.mix) * out_gain;
-            out_r[i] = (in_r[i] * dry + wet_r * p.mix) * out_gain;
+                .tick(saturate(g, warmth, in_r[i]), lp_a, low_gain, high_gain);
+            out_l[i] = (in_l[i] * dry + wet_l * mix) * out_gain;
+            out_r[i] = (in_r[i] * dry + wet_r * mix) * out_gain;
         }
     }
 }
@@ -245,6 +285,46 @@ pub extern "C" fn _initialize() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_gain_jump_is_smoothed() {
+        // Jump output +24 dB and drive mid-render: the output must glide,
+        // not step.
+        let mut e = SaturatorEngine::new(48_000.0);
+        let n = 9_600;
+        let input: Vec<f32> = (0..n).map(|i| (i as f32 * 0.02).sin() * 0.5).collect();
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
+        let mut p = *e.params();
+        p.output_db = 24.0;
+        p.drive_db = 20.0;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        // The transition region must never step harder than the post-jump
+        // steady signal itself moves (unsmoothed, the boundary step is the
+        // full +24 dB jump in one sample).
+        let settle = 2_000; // ~40 ms >> every tau involved
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
+    }
 
     #[test]
     fn param_defs_are_well_formed() {

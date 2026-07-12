@@ -9,8 +9,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED, TAU_GAIN,
 };
 
 pub const P_FREQ: u32 = 620;
@@ -119,14 +119,31 @@ pub struct RingModEngine {
     params: RingModParams,
     sample_rate: f32,
     phase: f32,
+    /// Anti-zipper smoothing: stereo offset/mix/output are gain-like.
+    /// Carrier frequency stays raw — the phase accumulator keeps it
+    /// click-free already.
+    sm_offset: Smoothed,
+    sm_mix: Smoothed,
+    sm_out: Smoothed,
+    snapped: bool,
 }
 
 impl RingModEngine {
     pub fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0);
+        let smoother = |tau: f32| {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sr, tau);
+            s
+        };
         Self {
             params: RingModParams::default(),
-            sample_rate: sample_rate.max(1.0),
+            sample_rate: sr,
             phase: 0.0,
+            sm_offset: smoother(TAU_GAIN),
+            sm_mix: smoother(TAU_GAIN),
+            sm_out: smoother(TAU_GAIN),
+            snapped: false,
         }
     }
 
@@ -140,19 +157,30 @@ impl RingModEngine {
 
     pub fn reset(&mut self) {
         self.phase = 0.0;
+        self.snapped = false;
     }
 
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
         let p = self.params;
         let inc = p.freq_hz / self.sample_rate;
-        let offset = p.stereo_deg / 360.0;
-        let dry = 1.0 - p.mix;
-        let out_gain = db_to_gain(p.output_db);
+        self.sm_offset.set_target(p.stereo_deg / 360.0);
+        self.sm_mix.set_target(p.mix);
+        self.sm_out.set_target(db_to_gain(p.output_db));
+        if !self.snapped {
+            self.sm_offset.snap();
+            self.sm_mix.snap();
+            self.sm_out.snap();
+            self.snapped = true;
+        }
         for i in 0..out_l.len() {
+            let offset = self.sm_offset.tick();
+            let mix = self.sm_mix.tick();
+            let dry = 1.0 - mix;
+            let out_gain = self.sm_out.tick();
             let cl = carrier(p.wave, self.phase);
             let cr = carrier(p.wave, self.phase + offset);
-            out_l[i] = (in_l[i] * dry + in_l[i] * cl * p.mix) * out_gain;
-            out_r[i] = (in_r[i] * dry + in_r[i] * cr * p.mix) * out_gain;
+            out_l[i] = (in_l[i] * dry + in_l[i] * cl * mix) * out_gain;
+            out_r[i] = (in_r[i] * dry + in_r[i] * cr * mix) * out_gain;
             self.phase += inc;
             if self.phase >= 1.0 {
                 self.phase -= 1.0;
@@ -242,6 +270,46 @@ mod tests {
 
     fn defaults() -> RingModEngine {
         RingModEngine::new(48_000.0)
+    }
+
+    #[test]
+    fn output_gain_jump_is_smoothed() {
+        // Jump output +24 dB and mix mid-render: the output must glide,
+        // not step.
+        let mut e = defaults();
+        let n = 9_600;
+        let input: Vec<f32> = (0..n).map(|i| (i as f32 * 0.02).sin() * 0.5).collect();
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
+        let mut p = *e.params();
+        p.output_db = 24.0;
+        p.mix = 0.6;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        // The transition region must never step harder than the post-jump
+        // steady signal itself moves (unsmoothed, the boundary step is the
+        // full +24 dB jump in one sample).
+        let settle = 2_000; // ~40 ms >> every tau involved
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
     }
 
     #[test]
