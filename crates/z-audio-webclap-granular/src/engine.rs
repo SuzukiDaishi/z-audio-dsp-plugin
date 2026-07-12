@@ -19,6 +19,7 @@
 //! - Grain edges always get a tiny minimum fade (`MIN_EDGE_FRAMES`) so
 //!   zero attack/decay settings cannot click.
 
+use wclap_plugin::{Smoothed, TAU_GAIN};
 use z_audio_dsp::flush_denormal;
 
 use crate::params::SYNC_BEATS;
@@ -320,6 +321,10 @@ pub struct GranularEngine {
     lut_dirty: bool,
     scratch_l: Vec<f32>,
     scratch_r: Vec<f32>,
+    /// Anti-zipper smoothing of the master level (snapped on the first
+    /// rendered block after construction/reset).
+    sm_level: Smoothed,
+    snapped: bool,
 }
 
 impl GranularEngine {
@@ -339,6 +344,12 @@ impl GranularEngine {
             lut_dirty: true,
             scratch_l: Vec::new(),
             scratch_r: Vec::new(),
+            sm_level: {
+                let mut s = Smoothed::new(0.0);
+                s.configure(sample_rate.max(1.0), TAU_GAIN);
+                s
+            },
+            snapped: false,
         };
         engine.rebuild_luts();
         engine
@@ -346,6 +357,7 @@ impl GranularEngine {
 
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate.max(1.0);
+        self.sm_level.configure(self.sample_rate, TAU_GAIN);
         self.reset_voices();
     }
 
@@ -362,6 +374,7 @@ impl GranularEngine {
         for voice in &mut self.voices {
             *voice = Voice::default();
         }
+        self.snapped = false;
     }
 
     pub fn params(&self) -> &GranularParams {
@@ -674,8 +687,13 @@ impl GranularEngine {
         self.scratch_l = scratch_l;
         self.scratch_r = scratch_r;
 
-        let level = self.params.level.clamp(0.0, 2.0);
+        self.sm_level.set_target(self.params.level.clamp(0.0, 2.0));
+        if !self.snapped {
+            self.sm_level.snap();
+            self.snapped = true;
+        }
         for i in 0..frames {
+            let level = self.sm_level.tick();
             left[i] = flush_denormal(left[i] * level);
             right[i] = flush_denormal(right[i] * level);
         }
