@@ -2,10 +2,13 @@
 //! 48 dB/oct, per-band Stereo/Mid/Side/Left/Right placement, band-solo
 //! listen filters, output trim, and an FFT spectrum tap for the UI.
 //!
-//! Everything here is allocation-free on the audio path; coefficients are
-//! recomputed on parameter changes only.
+//! Everything here is allocation-free on the audio path. Continuous band
+//! params (freq/gain/Q) and the output trim are smoothed against zipper
+//! noise; coefficients are recomputed once per 32-sample chunk while a
+//! band is gliding and not at all once settled.
 
 use crate::params::*;
+use wclap_plugin::{Smoothed, TAU_FREQ, TAU_GAIN};
 
 pub const MAX_STAGES: usize = 4;
 
@@ -423,18 +426,69 @@ struct BandRuntime {
     listen_states: [BiquadState; 2],
 }
 
+/// Anti-zipper smoothing of one band's continuous params. Frequency is
+/// smoothed in log2 so drags glide musically; discrete params (type,
+/// slope, placement, enable) switch instantly and snap these along.
+#[derive(Clone, Copy)]
+struct BandSmooth {
+    freq_l2: Smoothed,
+    gain_db: Smoothed,
+    q: Smoothed,
+}
+
+impl BandSmooth {
+    fn snap(&mut self) {
+        self.freq_l2.snap();
+        self.gain_db.snap();
+        self.q.snap();
+    }
+
+    fn is_settled(&self) -> bool {
+        self.freq_l2.is_settled(1.0e-4) && self.gain_db.is_settled(1.0e-3) && self.q.is_settled(1.0e-4)
+    }
+}
+
+/// Band smoothers tick once per this many samples; kernels are only
+/// recomputed for unsettled bands, so a static EQ pays nothing.
+const SMOOTH_CHUNK: usize = 32;
+
 pub struct EqEngine {
     params: EqParams,
     sample_rate: f32,
     bands: [BandRuntime; BAND_COUNT as usize],
+    sm: [BandSmooth; BAND_COUNT as usize],
+    /// Output trim smoothed per sample in the linear-gain domain.
+    sm_out: Smoothed,
+    snapped: bool,
 }
 
 impl EqEngine {
     pub fn new(sample_rate: f32) -> Self {
+        let sample_rate = sample_rate.max(1.0);
+        let params = EqParams::default();
+        let sm = core::array::from_fn(|i| {
+            let b = &params.bands[i];
+            let mut freq_l2 = Smoothed::new(b.freq_hz.log2());
+            freq_l2.configure(sample_rate / SMOOTH_CHUNK as f32, TAU_FREQ);
+            let mut gain_db = Smoothed::new(b.gain_db);
+            gain_db.configure(sample_rate / SMOOTH_CHUNK as f32, TAU_GAIN);
+            let mut q = Smoothed::new(b.q);
+            q.configure(sample_rate / SMOOTH_CHUNK as f32, TAU_FREQ);
+            BandSmooth {
+                freq_l2,
+                gain_db,
+                q,
+            }
+        });
+        let mut sm_out = Smoothed::new(1.0);
+        sm_out.configure(sample_rate, TAU_GAIN);
         let mut engine = Self {
-            params: EqParams::default(),
-            sample_rate: sample_rate.max(1.0),
+            params,
+            sample_rate,
             bands: [BandRuntime::default(); BAND_COUNT as usize],
+            sm,
+            sm_out,
+            snapped: false,
         };
         engine.rebuild_all();
         engine
@@ -448,7 +502,34 @@ impl EqEngine {
         self.sample_rate
     }
 
+    /// The band as the audio path currently hears it: discrete state from
+    /// the target params, continuous fields from the smoothers.
+    fn effective_band(&self, i: usize) -> BandParams {
+        BandParams {
+            freq_hz: self.sm[i].freq_l2.current().exp2(),
+            gain_db: self.sm[i].gain_db.current(),
+            q: self.sm[i].q.current(),
+            ..self.params.bands[i]
+        }
+    }
+
     pub fn set_params(&mut self, p: EqParams) {
+        for i in 0..BAND_COUNT as usize {
+            let (old, new) = (self.params.bands[i], p.bands[i]);
+            self.sm[i].freq_l2.set_target(new.freq_hz.log2());
+            self.sm[i].gain_db.set_target(new.gain_db);
+            self.sm[i].q.set_target(new.q);
+            let discrete_change = old.enabled != new.enabled
+                || old.ftype != new.ftype
+                || old.slope != new.slope
+                || old.placement != new.placement;
+            if discrete_change {
+                // The kernel shape changes anyway — gliding the continuous
+                // fields toward it from the old shape would sound wrong.
+                self.sm[i].snap();
+            }
+        }
+        self.sm_out.set_target(10.0_f32.powf(p.output_db / 20.0));
         self.params = p;
         self.rebuild_all();
     }
@@ -458,16 +539,61 @@ impl EqEngine {
             band.states = [[BiquadState::default(); 2]; MAX_STAGES];
             band.listen_states = [BiquadState::default(); 2];
         }
+        self.snapped = false;
     }
 
     fn rebuild_all(&mut self) {
         for i in 0..BAND_COUNT as usize {
-            self.bands[i].kernel = band_kernel(self.sample_rate, &self.params.bands[i]);
+            self.bands[i].kernel = band_kernel(self.sample_rate, &self.effective_band(i));
+        }
+    }
+
+    /// Advance the per-band smoothers one chunk and re-kernel any band
+    /// still gliding. Settled (or disabled) bands are skipped entirely,
+    /// keeping static configurations recompute-free and bit-exact.
+    fn tick_band_smoothers(&mut self) {
+        for i in 0..BAND_COUNT as usize {
+            if self.sm[i].is_settled() || !self.params.bands[i].enabled {
+                continue;
+            }
+            self.sm[i].freq_l2.tick();
+            self.sm[i].gain_db.tick();
+            self.sm[i].q.tick();
+            self.bands[i].kernel = band_kernel(self.sample_rate, &self.effective_band(i));
         }
     }
 
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
-        let out_gain = 10.0_f32.powf(self.params.output_db / 20.0);
+        if !self.snapped {
+            for sm in &mut self.sm {
+                sm.snap();
+            }
+            self.sm_out.snap();
+            self.rebuild_all();
+            self.snapped = true;
+        }
+        let n = out_l.len();
+        let mut at = 0;
+        while at < n {
+            let m = SMOOTH_CHUNK.min(n - at);
+            self.tick_band_smoothers();
+            self.process_chunk(
+                &in_l[at..at + m],
+                &in_r[at..at + m],
+                &mut out_l[at..at + m],
+                &mut out_r[at..at + m],
+            );
+            at += m;
+        }
+    }
+
+    fn process_chunk(
+        &mut self,
+        in_l: &[f32],
+        in_r: &[f32],
+        out_l: &mut [f32],
+        out_r: &mut [f32],
+    ) {
         let any_solo = self
             .params
             .bands
@@ -541,6 +667,7 @@ impl EqEngine {
                 r = sr;
             }
 
+            let out_gain = self.sm_out.tick();
             out_l[i] = l * out_gain;
             out_r[i] = r * out_gain;
         }
@@ -694,6 +821,66 @@ mod tests {
             placement: PLACE_STEREO,
             solo: false,
         }
+    }
+
+    #[test]
+    fn band_gain_jump_is_smoothed() {
+        // Jump band 0 from flat to +18 dB bell mid-render: the output must
+        // glide (bounded sample-to-sample delta), not step.
+        let fs = 48_000.0;
+        let input = sine(1_000.0, fs, 19_200, 0.25);
+        let mut p = EqParams::default();
+        p.bands[0] = enabled_band(TYPE_BELL, 1_000.0, 0.0, 1.0);
+        let mut e = EqEngine::new(fs);
+        e.set_params(p);
+        let half = input.len() / 2;
+        let (mut l, mut r) = (vec![0.0; input.len()], vec![0.0; input.len()]);
+        e.process(&input[..half], &input[..half], &mut l[..half], &mut r[..half]);
+        let base_delta = l[100..half]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        p.bands[0].gain_db = 18.0;
+        e.set_params(p);
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        let jump_delta = l2
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        // Unsmoothed, an +18 dB kernel swap steps the level ~8x in one
+        // sample; smoothed it must stay within the enlarged steady slope.
+        assert!(
+            jump_delta < base_delta * 9.0,
+            "zipper step {jump_delta} vs steady {base_delta}"
+        );
+    }
+
+    #[test]
+    fn smoothed_band_settles_on_the_target_response() {
+        // After a mid-render change, the band must converge to the same
+        // steady-state level a freshly configured engine produces.
+        let fs = 48_000.0;
+        let mut p = EqParams::default();
+        p.bands[0] = enabled_band(TYPE_BELL, 1_000.0, 0.0, 1.0);
+        let mut e = EqEngine::new(fs);
+        e.set_params(p);
+        let input = sine(1_000.0, fs, 9_600, 0.1);
+        let _ = run(&mut e, &input);
+        p.bands[0].gain_db = 12.0;
+        e.set_params(p);
+        // > 20 time constants: fully settled.
+        let _ = run(&mut e, &sine(1_000.0, fs, 24_000, 0.1));
+        let settled = run(&mut e, &input);
+        let fresh = {
+            let mut e2 = EqEngine::new(fs);
+            e2.set_params(p);
+            run(&mut e2, &input)
+        };
+        assert!(
+            (20.0 * (settled / fresh).log10()).abs() < 0.1,
+            "settled {settled} vs fresh {fresh}"
+        );
     }
 
     #[test]
