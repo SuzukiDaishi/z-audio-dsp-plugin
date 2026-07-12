@@ -18,8 +18,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED, TAU_GAIN, TAU_TIME,
 };
 
 pub const P_RATE: u32 = 820;
@@ -132,6 +132,13 @@ pub struct ChorusEngine {
     /// Shared LFO phase in [0, 1); per-voice/channel offsets are added on
     /// read, so no per-voice accumulators can drift apart.
     phase: f32,
+    /// Anti-zipper smoothing: depth/spread move the read taps (slewed
+    /// slowly), mix/output are gain-like.
+    sm_depth: Smoothed,
+    sm_spread: Smoothed,
+    sm_mix: Smoothed,
+    sm_out: Smoothed,
+    snapped: bool,
 }
 
 impl ChorusEngine {
@@ -140,6 +147,11 @@ impl ChorusEngine {
         // 64 ms plus interpolation guard samples; allocated here, never in
         // process().
         let len = (LINE_SECONDS * sample_rate) as usize + 4;
+        let smoother = |tau: f32| {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sample_rate, tau);
+            s
+        };
         Self {
             params: ChorusParams::default(),
             sample_rate,
@@ -147,6 +159,11 @@ impl ChorusEngine {
             buf_r: vec![0.0; len],
             write: 0,
             phase: 0.0,
+            sm_depth: smoother(TAU_TIME),
+            sm_spread: smoother(TAU_TIME),
+            sm_mix: smoother(TAU_GAIN),
+            sm_out: smoother(TAU_GAIN),
+            snapped: false,
         }
     }
 
@@ -163,6 +180,7 @@ impl ChorusEngine {
         self.buf_r.fill(0.0);
         self.write = 0;
         self.phase = 0.0;
+        self.snapped = false;
     }
 
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
@@ -173,9 +191,23 @@ impl ChorusEngine {
         let inc = p.rate_hz / self.sample_rate;
         let voices = p.voices.clamp(1, 3) as usize;
         let voice_gain = 1.0 / voices as f32;
-        let dry = 1.0 - p.mix;
-        let out_gain = db_to_gain(p.output_db);
+        self.sm_depth.set_target(p.depth);
+        self.sm_spread.set_target(p.spread);
+        self.sm_mix.set_target(p.mix);
+        self.sm_out.set_target(db_to_gain(p.output_db));
+        if !self.snapped {
+            self.sm_depth.snap();
+            self.sm_spread.snap();
+            self.sm_mix.snap();
+            self.sm_out.snap();
+            self.snapped = true;
+        }
         for i in 0..out_l.len() {
+            let depth = self.sm_depth.tick();
+            let spread = self.sm_spread.tick();
+            let mix = self.sm_mix.tick();
+            let dry = 1.0 - mix;
+            let out_gain = self.sm_out.tick();
             self.buf_l[self.write] = in_l[i];
             self.buf_r[self.write] = in_r[i];
             let mut wet_l = 0.0f32;
@@ -183,18 +215,16 @@ impl ChorusEngine {
             for v in 0..voices {
                 let phase_l = self.phase + v as f32 / voices as f32;
                 // Right channel: spread shifts the LFO by 0..0.5 cycles.
-                let phase_r = phase_l + p.spread * 0.5;
-                let del_l =
-                    (voice_delay_ms(p.depth, v, phase_l) * ms_to_samples).clamp(1.0, max_del);
-                let del_r =
-                    (voice_delay_ms(p.depth, v, phase_r) * ms_to_samples).clamp(1.0, max_del);
+                let phase_r = phase_l + spread * 0.5;
+                let del_l = (voice_delay_ms(depth, v, phase_l) * ms_to_samples).clamp(1.0, max_del);
+                let del_r = (voice_delay_ms(depth, v, phase_r) * ms_to_samples).clamp(1.0, max_del);
                 wet_l += read_tap(&self.buf_l, self.write, del_l);
                 wet_r += read_tap(&self.buf_r, self.write, del_r);
             }
             wet_l *= voice_gain;
             wet_r *= voice_gain;
-            out_l[i] = (in_l[i] * dry + wet_l * p.mix) * out_gain;
-            out_r[i] = (in_r[i] * dry + wet_r * p.mix) * out_gain;
+            out_l[i] = (in_l[i] * dry + wet_l * mix) * out_gain;
+            out_r[i] = (in_r[i] * dry + wet_r * mix) * out_gain;
             self.write += 1;
             if self.write >= n {
                 self.write = 0;
@@ -300,6 +330,46 @@ mod tests {
 
     fn sine(len: usize) -> Vec<f32> {
         (0..len).map(|i| (i as f32 * 0.06).sin() * 0.5).collect()
+    }
+
+    #[test]
+    fn output_gain_jump_is_smoothed() {
+        // Jump output +24 dB and mix mid-render: the output must glide,
+        // not step.
+        let mut e = ChorusEngine::new(SR);
+        let n = 9_600;
+        let input = sine(n);
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
+        let mut p = *e.params();
+        p.output_db = 24.0;
+        p.mix = 1.0;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        // The transition region must never step harder than the post-jump
+        // steady signal itself moves (unsmoothed, the boundary step is the
+        // full +24 dB jump in one sample).
+        let settle = 2_000; // ~40 ms >> every tau involved
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
     }
 
     #[test]

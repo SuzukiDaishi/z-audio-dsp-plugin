@@ -17,6 +17,8 @@ use z_audio_dsp::{
     SamplerEngineConfig, TriggerKind,
 };
 
+use wclap_plugin::{Smoothed, TAU_GAIN};
+
 use crate::protocol::ZoneDef;
 
 /// Simultaneous notes; each note may trigger several overlapping zones.
@@ -97,14 +99,25 @@ pub struct ZoneSampler {
     regions: Vec<Arc<SampleRegion>>,
     regions_dirty: bool,
     upload: Option<Upload>,
+    /// Anti-zipper smoothing of the output stage (snapped on the first
+    /// rendered block after construction/reset).
+    sm_master: Smoothed,
+    sm_width: Smoothed,
+    snapped: bool,
 }
 
 impl ZoneSampler {
     pub fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0);
+        let mk = || {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sr, TAU_GAIN);
+            s
+        };
         Self {
-            sample_rate: sample_rate.max(1.0),
+            sample_rate: sr,
             engine: SamplerEngine::new(SamplerEngineConfig {
-                sample_rate: sample_rate.max(1.0),
+                sample_rate: sr,
                 max_voices: MAX_VOICES,
             }),
             params: GlobalParams::default(),
@@ -114,11 +127,16 @@ impl ZoneSampler {
             regions: Vec::new(),
             regions_dirty: true,
             upload: None,
+            sm_master: mk(),
+            sm_width: mk(),
+            snapped: false,
         }
     }
 
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate.max(1.0);
+        self.sm_master.configure(self.sample_rate, TAU_GAIN);
+        self.sm_width.configure(self.sample_rate, TAU_GAIN);
         self.reset_voices();
     }
 
@@ -129,6 +147,7 @@ impl ZoneSampler {
             max_voices: MAX_VOICES,
         });
         self.regions_dirty = true;
+        self.snapped = false;
     }
 
     pub fn params(&self) -> &GlobalParams {
@@ -332,9 +351,18 @@ impl ZoneSampler {
     /// and `right` must be the same length.
     pub fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
         self.engine.process(left, right);
-        let width = self.params.stereo_width.clamp(0.0, 1.0);
-        let master = db_to_linear(self.params.master_gain_db);
+        self.sm_width
+            .set_target(self.params.stereo_width.clamp(0.0, 1.0));
+        self.sm_master
+            .set_target(db_to_linear(self.params.master_gain_db));
+        if !self.snapped {
+            self.sm_width.snap();
+            self.sm_master.snap();
+            self.snapped = true;
+        }
         for i in 0..left.len() {
+            let width = self.sm_width.tick();
+            let master = self.sm_master.tick();
             let l = flush_denormal(left[i]);
             let r = flush_denormal(right[i]);
             let mid = (l + r) * 0.5;
@@ -693,7 +721,11 @@ mod tests {
         let mut l = [0.0f32; 4_800];
         let mut r = [0.0f32; 4_800];
         s.render(&mut l, &mut r);
-        assert!(rms(&l) > 0.01, "dev bank note is inaudible (rms {})", rms(&l));
+        assert!(
+            rms(&l) > 0.01,
+            "dev bank note is inaudible (rms {})",
+            rms(&l)
+        );
     }
 
     #[test]

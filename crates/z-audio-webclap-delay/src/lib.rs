@@ -23,8 +23,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED, TAU_FREQ, TAU_GAIN,
 };
 
 pub const P_TIME_L: u32 = 800;
@@ -119,6 +119,14 @@ fn db_to_gain(db: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
 }
 
+/// A per-sample smoother starting at 0 (snapped to its real target on the
+/// engine's first processed block).
+fn gain_smoother(sample_rate: f32, tau: f32) -> Smoothed {
+    let mut s = Smoothed::new(0.0);
+    s.configure(sample_rate, tau);
+    s
+}
+
 /// Linear-interpolated read `delay` samples behind `write`.
 #[inline]
 fn read_tap(buf: &[f32], write: usize, delay: f32) -> f32 {
@@ -164,6 +172,13 @@ pub struct DelayEngine {
     snapped: bool,
     damp_l: DampState,
     damp_r: DampState,
+    /// Anti-zipper smoothing for the gain-like params and the damping
+    /// coefficients (the delay times have their own slew above).
+    sm_feedback: Smoothed,
+    sm_mix: Smoothed,
+    sm_out: Smoothed,
+    sm_a_lp: Smoothed,
+    sm_a_hp: Smoothed,
 }
 
 impl DelayEngine {
@@ -183,6 +198,11 @@ impl DelayEngine {
             snapped: false,
             damp_l: DampState::default(),
             damp_r: DampState::default(),
+            sm_feedback: gain_smoother(sample_rate, TAU_GAIN),
+            sm_mix: gain_smoother(sample_rate, TAU_GAIN),
+            sm_out: gain_smoother(sample_rate, TAU_GAIN),
+            sm_a_lp: gain_smoother(sample_rate, TAU_FREQ),
+            sm_a_hp: gain_smoother(sample_rate, TAU_FREQ),
         }
     }
 
@@ -212,32 +232,46 @@ impl DelayEngine {
         let time_r_ms = if p.link { p.time_l_ms } else { p.time_r_ms };
         let target_l = (p.time_l_ms * ms_to_samples).clamp(1.0, max_del);
         let target_r = (time_r_ms * ms_to_samples).clamp(1.0, max_del);
+        self.sm_feedback.set_target(p.feedback);
+        self.sm_mix.set_target(p.mix);
+        self.sm_out.set_target(db_to_gain(p.output_db));
+        self.sm_a_lp.set_target(
+            1.0 - (-core::f32::consts::TAU * p.damp_lp_hz.min(self.sample_rate * 0.45)
+                / self.sample_rate)
+                .exp(),
+        );
+        self.sm_a_hp.set_target(
+            1.0 - (-core::f32::consts::TAU * p.damp_hp_hz.min(self.sample_rate * 0.45)
+                / self.sample_rate)
+                .exp(),
+        );
         if !self.snapped {
             self.del_l = target_l;
             self.del_r = target_r;
+            self.sm_feedback.snap();
+            self.sm_mix.snap();
+            self.sm_out.snap();
+            self.sm_a_lp.snap();
+            self.sm_a_hp.snap();
             self.snapped = true;
         }
         // ~0.0008 per sample at 48 kHz, scaled so the sweep speed is
         // constant in seconds regardless of rate.
         let smooth = (0.0008 * 48_000.0 / self.sample_rate).clamp(0.0, 1.0);
-        let a_lp = 1.0
-            - (-core::f32::consts::TAU * p.damp_lp_hz.min(self.sample_rate * 0.45)
-                / self.sample_rate)
-                .exp();
-        let a_hp = 1.0
-            - (-core::f32::consts::TAU * p.damp_hp_hz.min(self.sample_rate * 0.45)
-                / self.sample_rate)
-                .exp();
-        let dry = 1.0 - p.mix;
-        let out_gain = db_to_gain(p.output_db);
         for i in 0..out_l.len() {
             self.del_l += smooth * (target_l - self.del_l);
             self.del_r += smooth * (target_r - self.del_r);
+            let a_lp = self.sm_a_lp.tick();
+            let a_hp = self.sm_a_hp.tick();
+            let feedback = self.sm_feedback.tick();
+            let mix = self.sm_mix.tick();
+            let dry = 1.0 - mix;
+            let out_gain = self.sm_out.tick();
             let tap_l = read_tap(&self.buf_l, self.write, self.del_l);
             let tap_r = read_tap(&self.buf_r, self.write, self.del_r);
             // Damping sits inside the loop: every round trip is filtered.
-            let fb_l = self.damp_l.tick(tap_l, a_lp, a_hp) * p.feedback;
-            let fb_r = self.damp_r.tick(tap_r, a_lp, a_hp) * p.feedback;
+            let fb_l = self.damp_l.tick(tap_l, a_lp, a_hp) * feedback;
+            let fb_r = self.damp_r.tick(tap_r, a_lp, a_hp) * feedback;
             if p.ping_pong {
                 // Mono input into the L line; taps cross-feed L->R->L.
                 let mono = (in_l[i] + in_r[i]) * 0.5;
@@ -251,8 +285,8 @@ impl DelayEngine {
             if self.write >= n {
                 self.write = 0;
             }
-            out_l[i] = (in_l[i] * dry + tap_l * p.mix) * out_gain;
-            out_r[i] = (in_r[i] * dry + tap_r * p.mix) * out_gain;
+            out_l[i] = (in_l[i] * dry + tap_l * mix) * out_gain;
+            out_r[i] = (in_r[i] * dry + tap_r * mix) * out_gain;
         }
     }
 }
@@ -401,6 +435,49 @@ mod tests {
                 def.id
             );
         }
+    }
+
+    #[test]
+    fn output_gain_jump_is_smoothed() {
+        // Jump output +24 dB and mix mid-render: the level must glide, not
+        // step at the block boundary.
+        let mut e = engine_with(|p| {
+            p.mix = 0.2;
+            p.feedback = 0.3;
+        });
+        let n = 9_600;
+        let input: Vec<f32> = (0..n).map(|i| (i as f32 * 0.02).sin() * 0.5).collect();
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
+        let mut p = *e.params();
+        p.output_db = 24.0;
+        p.mix = 0.5;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        // The transition region must never step harder than the post-jump
+        // steady signal itself moves (unsmoothed, the boundary step is the
+        // full +24 dB jump in one sample).
+        let settle = 2_000; // ~40 ms >> every tau involved
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
     }
 
     #[test]

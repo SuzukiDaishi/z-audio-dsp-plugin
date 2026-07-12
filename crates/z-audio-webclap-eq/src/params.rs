@@ -55,8 +55,9 @@ pub const Q_MIN: f32 = 0.1;
 pub const Q_MAX: f32 = 30.0;
 
 /// Staggered default frequencies so freshly enabled bands land usefully.
-pub const DEFAULT_FREQS: [f32; BAND_COUNT as usize] =
-    [30.0, 80.0, 200.0, 500.0, 1_200.0, 3_000.0, 8_000.0, 16_000.0];
+pub const DEFAULT_FREQS: [f32; BAND_COUNT as usize] = [
+    30.0, 80.0, 200.0, 500.0, 1_200.0, 3_000.0, 8_000.0, 16_000.0,
+];
 
 fn def(id: u32, name: &'static [u8], min: f64, max: f64, default: f64, stepped: bool) -> ParamDef {
     ParamDef {

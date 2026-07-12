@@ -12,8 +12,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, TAU_GAIN,
 };
 
 pub const P_THRESHOLD: u32 = 900;
@@ -104,16 +104,28 @@ pub struct GateEngine {
     gain: f32,
     /// Hold countdown in samples; reloaded whenever env >= threshold.
     hold_remaining: u32,
+    /// Anti-zipper smoothing for the output trim. The gate gain itself
+    /// already moves through its attack/release one-poles.
+    sm_out: Smoothed,
+    snapped: bool,
 }
 
 impl GateEngine {
     pub fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0);
+        let smoother = |tau: f32| {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sr, tau);
+            s
+        };
         Self {
             params: GateParams::default(),
-            sample_rate: sample_rate.max(1.0),
+            sample_rate: sr,
             env: 0.0,
             gain: 1.0,
             hold_remaining: 0,
+            sm_out: smoother(TAU_GAIN),
+            snapped: false,
         }
     }
 
@@ -129,6 +141,7 @@ impl GateEngine {
         self.env = 0.0;
         self.gain = 1.0;
         self.hold_remaining = 0;
+        self.snapped = false;
     }
 
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
@@ -136,7 +149,11 @@ impl GateEngine {
         let fs = self.sample_rate;
         let thr = db_to_gain(p.threshold_db);
         let range = db_to_gain(p.range_db);
-        let out_gain = db_to_gain(p.output_db);
+        self.sm_out.set_target(db_to_gain(p.output_db));
+        if !self.snapped {
+            self.sm_out.snap();
+            self.snapped = true;
+        }
         // Fixed detector: fast rise so transients open the gate, ~10 ms
         // fall so the envelope rides sine peaks instead of zero crossings.
         let det_att = coef(0.5, fs);
@@ -159,6 +176,7 @@ impl GateEngine {
             };
             let g = if target > self.gain { att } else { rel };
             self.gain += g * (target - self.gain);
+            let out_gain = self.sm_out.tick();
             out_l[i] = in_l[i] * self.gain * out_gain;
             out_r[i] = in_r[i] * self.gain * out_gain;
         }
@@ -269,6 +287,45 @@ mod tests {
     }
 
     #[test]
+    fn output_gain_jump_is_smoothed() {
+        // A loud steady sine keeps the gate open; jump output +24 dB
+        // mid-render: the output must glide, not step.
+        let mut e = defaults();
+        let n = 9_600;
+        let input = sine(n, 1_000.0, 0.5);
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
+        let mut p = *e.params();
+        p.output_db = 24.0;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        // The transition region must never step harder than the post-jump
+        // steady signal itself moves (unsmoothed, the boundary step is the
+        // full +24 dB jump in one sample).
+        let settle = 2_000; // ~40 ms >> every tau involved
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
+    }
+
+    #[test]
     fn param_defs_are_well_formed() {
         let defs = param_defs();
         assert_eq!(defs.len(), 6);
@@ -313,8 +370,7 @@ mod tests {
         e.set_params(p);
         let input = sine(FS, 1_000.0, 0.001);
         let out = run(&mut e, &input);
-        let atten_db =
-            20.0 * (rms(&out[FS - 4_800..]) / rms(&input[FS - 4_800..])).log10();
+        let atten_db = 20.0 * (rms(&out[FS - 4_800..]) / rms(&input[FS - 4_800..])).log10();
         assert!((atten_db + 60.0).abs() < 3.0, "attenuation {atten_db} dB");
     }
 

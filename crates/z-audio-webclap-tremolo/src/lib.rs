@@ -9,8 +9,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED, TAU_GAIN,
 };
 
 pub const P_RATE: u32 = 880;
@@ -122,16 +122,32 @@ pub struct TremoloEngine {
     /// because the stereo phase offset puts the edges at different times).
     smooth_l: f32,
     smooth_r: f32,
+    /// Anti-zipper smoothing: depth/phase offset/output are gain-like.
+    /// Rate stays raw — the phase accumulator keeps it click-free.
+    sm_depth: Smoothed,
+    sm_offset: Smoothed,
+    sm_out: Smoothed,
+    snapped: bool,
 }
 
 impl TremoloEngine {
     pub fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0);
+        let smoother = |tau: f32| {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sr, tau);
+            s
+        };
         Self {
             params: TremoloParams::default(),
-            sample_rate: sample_rate.max(1.0),
+            sample_rate: sr,
             phase: 0.0,
             smooth_l: 0.0,
             smooth_r: 0.0,
+            sm_depth: smoother(TAU_GAIN),
+            sm_offset: smoother(TAU_GAIN),
+            sm_out: smoother(TAU_GAIN),
+            snapped: false,
         }
     }
 
@@ -147,17 +163,28 @@ impl TremoloEngine {
         self.phase = 0.0;
         self.smooth_l = 0.0;
         self.smooth_r = 0.0;
+        self.snapped = false;
     }
 
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
         let p = self.params;
         let inc = p.rate_hz / self.sample_rate;
-        let offset = p.phase_deg / 360.0;
-        let out_gain = db_to_gain(p.output_db);
+        self.sm_depth.set_target(p.depth);
+        self.sm_offset.set_target(p.phase_deg / 360.0);
+        self.sm_out.set_target(db_to_gain(p.output_db));
+        if !self.snapped {
+            self.sm_depth.snap();
+            self.sm_offset.snap();
+            self.sm_out.snap();
+            self.snapped = true;
+        }
         // ~2 ms one-pole, applied to the square LFO only: it keeps
         // depth-1 on/off gating click-free without dulling sine/tri.
         let smooth_a = 1.0 - (-1.0 / (0.002 * self.sample_rate)).exp();
         for i in 0..out_l.len() {
+            let depth = self.sm_depth.tick();
+            let offset = self.sm_offset.tick();
+            let out_gain = self.sm_out.tick();
             let raw_l = lfo(p.wave, self.phase);
             let raw_r = lfo(p.wave, self.phase + offset);
             let (vl, vr) = if p.wave == WAVE_SQUARE {
@@ -171,8 +198,8 @@ impl TremoloEngine {
                 (raw_l, raw_r)
             };
             // Gain in [1 - depth, 1]: depth 1 sweeps full-on to silence.
-            let gain_l = 1.0 - p.depth * (0.5 + 0.5 * vl);
-            let gain_r = 1.0 - p.depth * (0.5 + 0.5 * vr);
+            let gain_l = 1.0 - depth * (0.5 + 0.5 * vl);
+            let gain_r = 1.0 - depth * (0.5 + 0.5 * vr);
             out_l[i] = in_l[i] * gain_l * out_gain;
             out_r[i] = in_r[i] * gain_r * out_gain;
             self.phase += inc;
@@ -267,6 +294,46 @@ mod tests {
     }
 
     #[test]
+    fn output_gain_jump_is_smoothed() {
+        // Jump output +24 dB and depth mid-render: the output must glide,
+        // not step.
+        let mut e = defaults();
+        let n = 9_600;
+        let input: Vec<f32> = (0..n).map(|i| (i as f32 * 0.02).sin() * 0.5).collect();
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
+        let mut p = *e.params();
+        p.output_db = 24.0;
+        p.depth = 1.0;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        // The transition region must never step harder than the post-jump
+        // steady signal itself moves (unsmoothed, the boundary step is the
+        // full +24 dB jump in one sample).
+        let settle = 2_000; // ~40 ms >> every tau involved
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
+    }
+
+    #[test]
     fn param_defs_are_well_formed() {
         let defs = param_defs();
         assert_eq!(defs.len(), 5);
@@ -351,9 +418,7 @@ mod tests {
         let input = vec![1.0f32; 24_000]; // two cycles at 4 Hz
         let (mut l, mut r) = (vec![0.0; 24_000], vec![0.0; 24_000]);
         e.process(&input, &input, &mut l, &mut r);
-        let max_jump = l
-            .windows(2)
-            .fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
+        let max_jump = l.windows(2).fold(0.0f32, |m, w| m.max((w[1] - w[0]).abs()));
         assert!(max_jump < 0.35, "max jump {max_jump}");
         let min = l.iter().fold(f32::MAX, |m, s| m.min(*s));
         let max = l.iter().fold(f32::MIN, |m, s| m.max(*s));

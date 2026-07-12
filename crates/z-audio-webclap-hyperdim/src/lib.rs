@@ -11,8 +11,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED, TAU_GAIN, TAU_TIME,
 };
 
 pub const P_HYPER_RATE: u32 = 920;
@@ -159,12 +159,25 @@ pub struct HyperDimEngine {
     dim_r: DelayLine,
     hyper_phase: f32,
     dim_phase: f32,
+    /// Anti-zipper smoothing: dim size and detune move delay taps
+    /// (slewed slowly), the wets and output are gain-like.
+    sm_dim_base: Smoothed,
+    sm_detune: Smoothed,
+    sm_hyper_wet: Smoothed,
+    sm_dim_wet: Smoothed,
+    sm_out: Smoothed,
+    snapped: bool,
 }
 
 impl HyperDimEngine {
     pub fn new(sample_rate: f32) -> Self {
         let sr = sample_rate.max(1.0);
         let len = (MAX_DELAY_MS * 0.001 * sr) as usize + 4;
+        let smoother = |tau: f32| {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sr, tau);
+            s
+        };
         Self {
             params: HyperDimParams::default(),
             sample_rate: sr,
@@ -174,6 +187,12 @@ impl HyperDimEngine {
             dim_r: DelayLine::new(len),
             hyper_phase: 0.0,
             dim_phase: 0.0,
+            sm_dim_base: smoother(TAU_TIME),
+            sm_detune: smoother(TAU_TIME),
+            sm_hyper_wet: smoother(TAU_GAIN),
+            sm_dim_wet: smoother(TAU_GAIN),
+            sm_out: smoother(TAU_GAIN),
+            snapped: false,
         }
     }
 
@@ -192,6 +211,7 @@ impl HyperDimEngine {
         self.dim_r.clear();
         self.hyper_phase = 0.0;
         self.dim_phase = 0.0;
+        self.snapped = false;
     }
 
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
@@ -202,12 +222,28 @@ impl HyperDimEngine {
         // moves the base delay, not the rate.
         let dim_inc = 0.25 / self.sample_rate;
         let ms = 0.001 * self.sample_rate;
-        let dim_base = (3.0 + p.dim_size * 20.0) * ms;
+        self.sm_dim_base.set_target((3.0 + p.dim_size * 20.0) * ms);
+        self.sm_detune.set_target(p.hyper_detune);
+        self.sm_hyper_wet.set_target(p.hyper_wet);
+        self.sm_dim_wet.set_target(p.dim_wet);
+        self.sm_out.set_target(db_to_gain(p.output_db));
+        if !self.snapped {
+            self.sm_dim_base.snap();
+            self.sm_detune.snap();
+            self.sm_hyper_wet.snap();
+            self.sm_dim_wet.snap();
+            self.sm_out.snap();
+            self.snapped = true;
+        }
         let dim_swing = 1.5 * ms;
         let voice_gain = 1.0 / (n as f32).sqrt();
-        let out_gain = db_to_gain(p.output_db);
 
         for i in 0..out_l.len() {
+            let dim_base = self.sm_dim_base.tick();
+            let detune = self.sm_detune.tick();
+            let hyper_wet = self.sm_hyper_wet.tick();
+            let dim_wet = self.sm_dim_wet.tick();
+            let out_gain = self.sm_out.tick();
             self.hyper_l.push(in_l[i]);
             self.hyper_r.push(in_r[i]);
 
@@ -215,7 +251,7 @@ impl HyperDimEngine {
             let mut wet_l = 0.0f32;
             let mut wet_r = 0.0f32;
             for v in 0..n {
-                let d = hyper_delay_ms(p.hyper_detune, v, n, self.hyper_phase) * ms;
+                let d = hyper_delay_ms(detune, v, n, self.hyper_phase) * ms;
                 // Alternate pan: even voices lean left, odd lean right.
                 let (gl, gr) = if n == 1 {
                     (0.7071, 0.7071)
@@ -229,8 +265,8 @@ impl HyperDimEngine {
             }
             wet_l *= voice_gain;
             wet_r *= voice_gain;
-            let hy_l = in_l[i] + (wet_l - in_l[i]) * p.hyper_wet;
-            let hy_r = in_r[i] + (wet_r - in_r[i]) * p.hyper_wet;
+            let hy_l = in_l[i] + (wet_l - in_l[i]) * hyper_wet;
+            let hy_r = in_r[i] + (wet_r - in_r[i]) * hyper_wet;
 
             // ---- Dimension: antiphase modulated pair, cross-mixed with
             // inverted polarity (the classic SDD-320 width trick).
@@ -239,8 +275,8 @@ impl HyperDimEngine {
             self.dim_r.push(hy_r);
             let tap_l = self.dim_l.read(dim_base + dim_swing * dim_lfo);
             let tap_r = self.dim_r.read(dim_base - dim_swing * dim_lfo);
-            let out_sl = hy_l + (tap_l - 0.7 * tap_r) * p.dim_wet;
-            let out_sr = hy_r + (tap_r - 0.7 * tap_l) * p.dim_wet;
+            let out_sl = hy_l + (tap_l - 0.7 * tap_r) * dim_wet;
+            let out_sr = hy_r + (tap_r - 0.7 * tap_l) * dim_wet;
 
             out_l[i] = out_sl * out_gain;
             out_r[i] = out_sr * out_gain;
@@ -363,6 +399,43 @@ mod tests {
 
     fn stereo_diff(l: &[f32], r: &[f32]) -> f32 {
         l.iter().zip(r.iter()).map(|(a, b)| (a - b).abs()).sum()
+    }
+
+    #[test]
+    fn output_gain_jump_is_smoothed() {
+        // Jump output +24 dB and dim size mid-render: the output must
+        // glide, not step.
+        let mut e = defaults();
+        let n = 9_600;
+        let input: Vec<f32> = (0..n).map(|i| (i as f32 * 0.02).sin() * 0.4).collect();
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
+        let mut p = *e.params();
+        p.output_db = 24.0;
+        p.dim_size = 1.0;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        let settle = 2_000;
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
     }
 
     #[test]

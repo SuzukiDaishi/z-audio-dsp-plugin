@@ -10,8 +10,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED, TAU_FREQ, TAU_GAIN,
 };
 
 pub const P_STAGES: u32 = 860;
@@ -133,16 +133,36 @@ pub struct PhaserEngine {
     left: PhaserChannel,
     right: PhaserChannel,
     lfo_phase: f32,
+    /// Anti-zipper smoothing: center sweeps a frequency, the rest are
+    /// gain-like.
+    sm_center: Smoothed,
+    sm_depth: Smoothed,
+    sm_feedback: Smoothed,
+    sm_mix: Smoothed,
+    sm_out: Smoothed,
+    snapped: bool,
 }
 
 impl PhaserEngine {
     pub fn new(sample_rate: f32) -> Self {
+        let sr = sample_rate.max(1.0);
+        let smoother = |tau: f32| {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sr, tau);
+            s
+        };
         Self {
             params: PhaserParams::default(),
-            sample_rate: sample_rate.max(1.0),
+            sample_rate: sr,
             left: PhaserChannel::default(),
             right: PhaserChannel::default(),
             lfo_phase: 0.0,
+            sm_center: smoother(TAU_FREQ),
+            sm_depth: smoother(TAU_GAIN),
+            sm_feedback: smoother(TAU_GAIN),
+            sm_mix: smoother(TAU_GAIN),
+            sm_out: smoother(TAU_GAIN),
+            snapped: false,
         }
     }
 
@@ -158,14 +178,14 @@ impl PhaserEngine {
         self.left = PhaserChannel::default();
         self.right = PhaserChannel::default();
         self.lfo_phase = 0.0;
+        self.snapped = false;
     }
 
     /// Allpass coefficient a = (t-1)/(t+1), t = tan(pi*f/fs), for a sweep
     /// frequency f = center * 2^(depth*2*sin) clamped to 30..fs*0.45.
     #[inline]
-    fn coeff(&self, lfo: f32) -> f32 {
-        let p = self.params;
-        let f = (p.center_hz * (p.depth * 2.0 * lfo).exp2()).clamp(30.0, self.sample_rate * 0.45);
+    fn coeff(&self, center_hz: f32, depth: f32, lfo: f32) -> f32 {
+        let f = (center_hz * (depth * 2.0 * lfo).exp2()).clamp(30.0, self.sample_rate * 0.45);
         let t = (core::f32::consts::PI * f / self.sample_rate).tan();
         (t - 1.0) / (t + 1.0)
     }
@@ -174,17 +194,34 @@ impl PhaserEngine {
         let p = self.params;
         let stages = (p.pairs.clamp(1, 6) as usize) * 2;
         let inc = p.rate_hz / self.sample_rate;
-        let dry = 1.0 - p.mix;
-        let out_gain = db_to_gain(p.output_db);
+        self.sm_center.set_target(p.center_hz);
+        self.sm_depth.set_target(p.depth);
+        self.sm_feedback.set_target(p.feedback);
+        self.sm_mix.set_target(p.mix);
+        self.sm_out.set_target(db_to_gain(p.output_db));
+        if !self.snapped {
+            self.sm_center.snap();
+            self.sm_depth.snap();
+            self.sm_feedback.snap();
+            self.sm_mix.snap();
+            self.sm_out.snap();
+            self.snapped = true;
+        }
         for i in 0..out_l.len() {
+            let center = self.sm_center.tick();
+            let depth = self.sm_depth.tick();
+            let feedback = self.sm_feedback.tick();
+            let mix = self.sm_mix.tick();
+            let dry = 1.0 - mix;
+            let out_gain = self.sm_out.tick();
             let lfo_l = (core::f32::consts::TAU * self.lfo_phase).sin();
             let lfo_r = (core::f32::consts::TAU * (self.lfo_phase + p.spread * 0.5)).sin();
-            let a_l = self.coeff(lfo_l);
-            let a_r = self.coeff(lfo_r);
-            let wet_l = self.left.tick(in_l[i], a_l, stages, p.feedback);
-            let wet_r = self.right.tick(in_r[i], a_r, stages, p.feedback);
-            out_l[i] = (in_l[i] * dry + wet_l * p.mix) * out_gain;
-            out_r[i] = (in_r[i] * dry + wet_r * p.mix) * out_gain;
+            let a_l = self.coeff(center, depth, lfo_l);
+            let a_r = self.coeff(center, depth, lfo_r);
+            let wet_l = self.left.tick(in_l[i], a_l, stages, feedback);
+            let wet_r = self.right.tick(in_r[i], a_r, stages, feedback);
+            out_l[i] = (in_l[i] * dry + wet_l * mix) * out_gain;
+            out_r[i] = (in_r[i] * dry + wet_r * mix) * out_gain;
             self.lfo_phase += inc;
             if self.lfo_phase >= 1.0 {
                 self.lfo_phase -= 1.0;
@@ -301,6 +338,46 @@ mod tests {
 
     fn rms(buf: &[f32]) -> f32 {
         (buf.iter().map(|s| s * s).sum::<f32>() / buf.len() as f32).sqrt()
+    }
+
+    #[test]
+    fn output_gain_jump_is_smoothed() {
+        // Jump output +24 dB and center mid-render: the output must glide,
+        // not step.
+        let mut e = defaults();
+        let n = 9_600;
+        let input: Vec<f32> = (0..n).map(|i| (i as f32 * 0.02).sin() * 0.5).collect();
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(
+            &input[..half],
+            &input[..half],
+            &mut l[..half],
+            &mut r[..half],
+        );
+        let mut p = *e.params();
+        p.output_db = 24.0;
+        p.center_hz = 4_000.0;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        // The transition region must never step harder than the post-jump
+        // steady signal itself moves (unsmoothed, the boundary step is the
+        // full +24 dB jump in one sample).
+        let settle = 2_000; // ~40 ms >> every tau involved
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
     }
 
     #[test]
@@ -429,10 +506,7 @@ mod tests {
         e.set_params(p);
         let input = noise(96_000, 0.25); // 2 s at 48 kHz
         let (l, r) = render(&mut e, &input);
-        let peak = l
-            .iter()
-            .chain(r.iter())
-            .fold(0.0f32, |m, s| m.max(s.abs()));
+        let peak = l.iter().chain(r.iter()).fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(peak.is_finite() && peak < 4.0, "peak {peak}");
     }
 

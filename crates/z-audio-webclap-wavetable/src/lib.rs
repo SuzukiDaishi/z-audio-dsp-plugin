@@ -21,6 +21,7 @@
 pub mod engine;
 pub mod params;
 pub mod protocol;
+pub mod shape;
 pub mod wavetable;
 
 use std::sync::OnceLock;
@@ -204,9 +205,7 @@ pub fn apply_param(p: &mut SynthParams, id: u32, value: f64) {
         P_BEND_RANGE => p.bend_range = v.clamp(0.0, 24.0).round(),
         P_GLIDE => p.glide_s = v.clamp(0.0, 2.0),
         P_FILTER_ENABLE => p.filter_enable = v >= 0.5,
-        P_FILTER_TYPE => {
-            p.filter_type = v.clamp(0.0, (FILTER_TYPE_COUNT - 1) as f32).round() as u8
-        }
+        P_FILTER_TYPE => p.filter_type = v.clamp(0.0, (FILTER_TYPE_COUNT - 1) as f32).round() as u8,
         P_FILTER_CUTOFF => p.cutoff_hz = v.clamp(20.0, 20_000.0),
         P_FILTER_RESO => p.resonance = v.clamp(0.0, 1.0),
         P_FILTER_DRIVE => p.drive = v.clamp(0.0, 1.0),
@@ -679,9 +678,7 @@ mod tests {
                         let id: u32 = rest[i..i + 3].parse().unwrap();
                         let tail = &rest[i + 4..];
                         let trimmed = tail.trim_start();
-                        let end = trimmed
-                            .find([',', '}', ' '])
-                            .unwrap_or(trimmed.len());
+                        let end = trimmed.find([',', '}', ' ']).unwrap_or(trimmed.len());
                         let literal = &trimmed[..end];
                         let value: f64 = literal.parse().unwrap_or_else(|_| {
                             panic!("preset id {id}: unparseable value {literal:?}")
@@ -707,7 +704,7 @@ mod tests {
     #[test]
     fn factory_presets_are_valid() {
         let presets = scan_presets(PRESETS_JS);
-        assert_eq!(presets.len(), 60, "expected 60 factory presets");
+        assert_eq!(presets.len(), 63, "expected 63 factory presets");
         let pairs: usize = presets.iter().map(|p| p.len()).sum();
         assert!(pairs >= 400, "scanner found too few pairs ({pairs})");
 
@@ -748,17 +745,11 @@ mod tests {
                 .map(|&(_, v)| v as i64)
                 .collect()
         };
-        let tables = collect(&[
-            OSC_A_BASE + OSC_TABLE,
-            OSC_B_BASE + OSC_TABLE,
-        ]);
+        let tables = collect(&[OSC_A_BASE + OSC_TABLE, OSC_B_BASE + OSC_TABLE]);
         for t in 0..wavetable::TABLE_COUNT as i64 {
             assert!(tables.contains(&t), "no preset uses table {t}");
         }
-        let warps = collect(&[
-            OSC_A_BASE + OSC_WARP_MODE,
-            OSC_B_BASE + OSC_WARP_MODE,
-        ]);
+        let warps = collect(&[OSC_A_BASE + OSC_WARP_MODE, OSC_B_BASE + OSC_WARP_MODE]);
         for w in 1..WARP_MODE_COUNT as i64 {
             assert!(warps.contains(&w), "no preset uses warp mode {w}");
         }

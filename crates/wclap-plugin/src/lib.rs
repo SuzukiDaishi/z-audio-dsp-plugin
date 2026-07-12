@@ -28,6 +28,9 @@ use core::ptr::{addr_of, addr_of_mut};
 #[cfg(test)]
 extern crate std;
 
+pub mod smooth;
+pub use smooth::{Smoothed, TAU_FREQ, TAU_GAIN, TAU_TIME};
+
 // ---------------------------------------------------------------------------
 // Allocator + panic handler — provided by default for no_std cdylibs (like
 // synome). Plugins that depend on std (e.g. for fundsp) must disable the

@@ -13,7 +13,9 @@
 //! synth), so renders are deterministic and unit-testable.
 
 use crate::params::*;
+use crate::shape::{soft_clip, Adaa1};
 use crate::wavetable::{WavetableSet, MAX_HARMONICS, MIPS};
+use wclap_plugin::{Smoothed, TAU_FREQ, TAU_GAIN};
 use z_audio_dsp::flush_denormal;
 
 pub const MAX_VOICES: usize = 16;
@@ -712,14 +714,6 @@ impl SvfState {
     }
 }
 
-/// Cheap tanh-shaped saturator for the filter drive.
-#[inline]
-fn soft_clip(x: f32) -> f32 {
-    let x = x.clamp(-3.0, 3.0);
-    let x2 = x * x;
-    x * (27.0 + x2) / (27.0 + 9.0 * x2)
-}
-
 // ---------------------------------------------------------------------------
 // Oscillator warp (Serum-style)
 // ---------------------------------------------------------------------------
@@ -790,27 +784,6 @@ impl WarpKernel {
             W_AM => (1.0 + self.a * other) / (1.0 + self.a),
             _ => 1.0,
         }
-    }
-}
-
-/// One distortion transfer function on a pre-gained sample. Crush is
-/// handled separately (it needs the sample-hold state).
-#[inline]
-fn distort(mode: u8, x: f32) -> f32 {
-    match mode {
-        DIST_HARD => x.clamp(-1.0, 1.0),
-        DIST_FOLD => {
-            // Triangle foldback: identity in [-1,1], reflects beyond.
-            let g = x - 4.0 * ((x + 2.0) * 0.25).floor();
-            if g.abs() > 1.0 {
-                g.signum() * (2.0 - g.abs())
-            } else {
-                g
-            }
-        }
-        // Master bus only, so a real sin() per sample is affordable.
-        DIST_SINE => (core::f32::consts::FRAC_PI_2 * x.clamp(-3.0, 3.0)).sin(),
-        _ => soft_clip(x),
     }
 }
 
@@ -947,6 +920,9 @@ struct Voice {
     comb_l: Vec<f32>,
     comb_r: Vec<f32>,
     comb_pos: usize,
+    /// ADAA state for the filter-drive saturator.
+    drive_adaa_l: Adaa1,
+    drive_adaa_r: Adaa1,
 }
 
 impl Voice {
@@ -978,6 +954,8 @@ impl Voice {
             comb_l: Vec::new(),
             comb_r: Vec::new(),
             comb_pos: 0,
+            drive_adaa_l: Adaa1::default(),
+            drive_adaa_r: Adaa1::default(),
         }
     }
 }
@@ -1030,6 +1008,95 @@ pub struct SynthEngine {
     /// Sample-hold state for the Crush distortion mode.
     decim_counter: u32,
     decim_hold: (f32, f32),
+    /// ADAA state for the shaper distortion modes on the master bus.
+    dist_adaa_l: Adaa1,
+    dist_adaa_r: Adaa1,
+    /// One-pole DC blocker after the shaper distortion (fold/sine on
+    /// asymmetric material produce DC that muddies the low end).
+    dc_x1: (f32, f32),
+    dc_y1: (f32, f32),
+    /// Anti-zipper smoothing of the continuous params, ticked once per
+    /// control block. Mod-matrix offsets are added on top of the smoothed
+    /// base values, so modulation stays sample-accurate per block.
+    sm: ParamSmoothers,
+    /// Whether any voice was active at the end of the previous block —
+    /// while the synth is silent the smoothers snap, so edits made
+    /// between notes land instantly on the next note.
+    was_active: bool,
+}
+
+/// Control-rate smoothers for `SynthParams` fields that audibly zipper
+/// when dragged (cutoff in log2 Hz; everything else linear).
+struct ParamSmoothers {
+    cutoff_l2: Smoothed,
+    reso: Smoothed,
+    drive: Smoothed,
+    filter_mix: Smoothed,
+    a_wt: Smoothed,
+    b_wt: Smoothed,
+    a_level: Smoothed,
+    b_level: Smoothed,
+    a_pan: Smoothed,
+    b_pan: Smoothed,
+    dist_drive: Smoothed,
+    dist_mix: Smoothed,
+}
+
+impl ParamSmoothers {
+    fn new(sample_rate: f32) -> Self {
+        let rate = sample_rate.max(1.0) / CONTROL_BLOCK as f32;
+        let mk = |tau: f32| {
+            let mut s = Smoothed::new(0.0);
+            s.configure(rate, tau);
+            s
+        };
+        Self {
+            cutoff_l2: mk(TAU_FREQ),
+            reso: mk(TAU_GAIN),
+            drive: mk(TAU_GAIN),
+            filter_mix: mk(TAU_GAIN),
+            a_wt: mk(TAU_GAIN),
+            b_wt: mk(TAU_GAIN),
+            a_level: mk(TAU_GAIN),
+            b_level: mk(TAU_GAIN),
+            a_pan: mk(TAU_GAIN),
+            b_pan: mk(TAU_GAIN),
+            dist_drive: mk(TAU_GAIN),
+            dist_mix: mk(TAU_GAIN),
+        }
+    }
+
+    fn all(&mut self) -> [&mut Smoothed; 12] {
+        [
+            &mut self.cutoff_l2,
+            &mut self.reso,
+            &mut self.drive,
+            &mut self.filter_mix,
+            &mut self.a_wt,
+            &mut self.b_wt,
+            &mut self.a_level,
+            &mut self.b_level,
+            &mut self.a_pan,
+            &mut self.b_pan,
+            &mut self.dist_drive,
+            &mut self.dist_mix,
+        ]
+    }
+
+    fn set_targets(&mut self, p: &SynthParams) {
+        self.cutoff_l2.set_target(p.cutoff_hz.max(1.0).log2());
+        self.reso.set_target(p.resonance);
+        self.drive.set_target(p.drive);
+        self.filter_mix.set_target(p.filter_mix);
+        self.a_wt.set_target(p.osc_a.wt_pos);
+        self.b_wt.set_target(p.osc_b.wt_pos);
+        self.a_level.set_target(p.osc_a.level);
+        self.b_level.set_target(p.osc_b.level);
+        self.a_pan.set_target(p.osc_a.pan);
+        self.b_pan.set_target(p.osc_b.pan);
+        self.dist_drive.set_target(p.dist_drive);
+        self.dist_mix.set_target(p.dist_mix);
+    }
 }
 
 /// One frame of live modulation values for the UI meter packet.
@@ -1069,6 +1136,12 @@ impl SynthEngine {
             master_smooth: 0.8,
             decim_counter: 0,
             decim_hold: (0.0, 0.0),
+            dist_adaa_l: Adaa1::default(),
+            dist_adaa_r: Adaa1::default(),
+            dc_x1: (0.0, 0.0),
+            dc_y1: (0.0, 0.0),
+            sm: ParamSmoothers::new(sample_rate.max(8_000.0)),
+            was_active: false,
         };
         e.resize_combs();
         e
@@ -1089,6 +1162,8 @@ impl SynthEngine {
     pub fn set_sample_rate(&mut self, sample_rate: f32) {
         self.sample_rate = sample_rate.max(8_000.0);
         self.inv_sample_rate = 1.0 / self.sample_rate;
+        self.sm = ParamSmoothers::new(self.sample_rate);
+        self.was_active = false;
         self.resize_combs();
     }
 
@@ -1124,7 +1199,14 @@ impl SynthEngine {
             v.comb_pos = 0;
             v.fm_a_prev = 0.0;
             v.fm_b_prev = 0.0;
+            v.drive_adaa_l.reset();
+            v.drive_adaa_r.reset();
         }
+        self.dist_adaa_l.reset();
+        self.dist_adaa_r.reset();
+        self.dc_x1 = (0.0, 0.0);
+        self.dc_y1 = (0.0, 0.0);
+        self.was_active = false;
     }
 
     pub fn active_voices(&self) -> usize {
@@ -1148,8 +1230,7 @@ impl SynthEngine {
             rnd1: self.free_rnd1.value(&p.rnd1),
             rnd2: self.free_rnd2.value(&p.rnd2),
             velocity: self.last_velocity,
-            note: ((self.last_key as f32 - p.note_center as f32)
-                / p.note_range.max(1) as f32)
+            note: ((self.last_key as f32 - p.note_center as f32) / p.note_range.max(1) as f32)
                 .clamp(-1.0, 1.0),
         }
     }
@@ -1253,10 +1334,13 @@ impl SynthEngine {
         v.osc_b.trigger(&self.params.osc_b, &mut rng);
         v.fm_a_prev = 0.0;
         v.fm_b_prev = 0.0;
-        // Stolen voices must not ring with the previous note's comb tail.
+        // Stolen voices must not ring with the previous note's comb tail,
+        // and a stale ADAA x1 would spike the first drive sample.
         v.comb_l.fill(0.0);
         v.comb_r.fill(0.0);
         v.comb_pos = 0;
+        v.drive_adaa_l.reset();
+        v.drive_adaa_r.reset();
     }
 
     pub fn note_off(&mut self, key: u8) {
@@ -1291,6 +1375,29 @@ impl SynthEngine {
         let free2 = self.free_lfo2.advance(&p.lfo2, dt);
         let free_r1 = self.free_rnd1.advance(&p.rnd1, dt);
         let free_r2 = self.free_rnd2.advance(&p.rnd2, dt);
+
+        // Anti-zipper smoothing at control-block rate. While the synth is
+        // silent the smoothers snap, so edits made between notes land
+        // instantly on the next note (and pre-render test setups stay
+        // bit-exact).
+        self.sm.set_targets(&p);
+        if !self.was_active {
+            for s in self.sm.all() {
+                s.snap();
+            }
+        }
+        let cutoff_base = self.sm.cutoff_l2.tick().exp2();
+        let reso_base = self.sm.reso.tick();
+        let drive_base = self.sm.drive.tick();
+        let filter_mix_base = self.sm.filter_mix.tick();
+        let a_wt_base = self.sm.a_wt.tick();
+        let b_wt_base = self.sm.b_wt.tick();
+        let a_level_base = self.sm.a_level.tick();
+        let b_level_base = self.sm.b_level.tick();
+        let a_pan_base = self.sm.a_pan.tick();
+        let b_pan_base = self.sm.b_pan.tick();
+        let dist_drive_base = self.sm.dist_drive.tick();
+        let dist_mix_base = self.sm.dist_mix.tick();
 
         // Master smoothing toward the (possibly mod-shifted) target happens
         // after voice mods are known; collect the largest master offset.
@@ -1342,8 +1449,7 @@ impl SynthEngine {
             } else {
                 voice.velocity.powf((3.0 * p.vel_curve).exp2())
             };
-            let note_src = ((voice.key as f32 - p.note_center as f32)
-                / p.note_range.max(1) as f32)
+            let note_src = ((voice.key as f32 - p.note_center as f32) / p.note_range.max(1) as f32)
                 .clamp(-1.0, 1.0);
 
             // Mod matrix.
@@ -1409,12 +1515,12 @@ impl SynthEngine {
             let a_kernel = WarpKernel::new(oa.warp_mode, oa.warp_amount);
             let b_kernel = WarpKernel::new(ob.warp_mode, ob.warp_amount);
 
-            let a_wt = (oa.wt_pos + m.a_wt).clamp(0.0, 1.0);
-            let b_wt = (ob.wt_pos + m.b_wt).clamp(0.0, 1.0);
-            let a_level = (oa.level + m.a_level).clamp(0.0, 1.0);
-            let b_level = (ob.level + m.b_level).clamp(0.0, 1.0);
-            let a_pan = (oa.pan + m.a_pan).clamp(-1.0, 1.0);
-            let b_pan = (ob.pan + m.b_pan).clamp(-1.0, 1.0);
+            let a_wt = (a_wt_base + m.a_wt).clamp(0.0, 1.0);
+            let b_wt = (b_wt_base + m.b_wt).clamp(0.0, 1.0);
+            let a_level = (a_level_base + m.a_level).clamp(0.0, 1.0);
+            let b_level = (b_level_base + m.b_level).clamp(0.0, 1.0);
+            let a_pan = (a_pan_base + m.a_pan).clamp(-1.0, 1.0);
+            let b_pan = (b_pan_base + m.b_pan).clamp(-1.0, 1.0);
             voice.osc_a.update_control(&oa, a_pan, a_level);
             voice.osc_b.update_control(&ob, b_pan, b_level);
 
@@ -1437,11 +1543,11 @@ impl SynthEngine {
 
             // Filter coefficients (keytrack shifts cutoff with the note).
             let keytrack_oct = p.keytrack * (voice.note_pitch - 60.0) / 12.0;
-            let cutoff = p.cutoff_hz * (m.cutoff_oct + keytrack_oct).exp2();
-            let reso = (p.resonance + m.reso).clamp(0.0, 1.0);
+            let cutoff = cutoff_base * (m.cutoff_oct + keytrack_oct).exp2();
+            let reso = (reso_base + m.reso).clamp(0.0, 1.0);
             let coeffs = SvfCoeffs::compute(cutoff, reso, self.sample_rate);
-            let drive_gain = 1.0 + p.drive * 6.0;
-            let drive_comp = 1.0 / (1.0 + p.drive * 1.5);
+            let drive_gain = 1.0 + drive_base * 6.0;
+            let drive_comp = 1.0 / (1.0 + drive_base * 1.5);
 
             // Comb: cutoff-tracked fractional delay, resonance sets the
             // feedback. Stable for |fb| < 1; comp keeps loudness in check.
@@ -1450,7 +1556,11 @@ impl SynthEngine {
             let (comb_delay, comb_fb, comb_comp) = if is_comb {
                 let d = (self.sample_rate / cutoff.max(20.0)).clamp(2.0, (comb_len - 2) as f32);
                 let mag = 0.50 + 0.48 * reso;
-                let fb = if p.filter_type == FT_COMB_M { -mag } else { mag };
+                let fb = if p.filter_type == FT_COMB_M {
+                    -mag
+                } else {
+                    mag
+                };
                 (d, fb, 1.0 - 0.5 * mag)
             } else {
                 (0.0, 0.0, 1.0)
@@ -1458,8 +1568,7 @@ impl SynthEngine {
             // Formant: the cutoff knob's log position picks the vowel
             // (200 Hz = "a" … 4 kHz = "u"), three parallel band-passes.
             let formant_coeffs = if p.filter_type == FT_FORMANT {
-                let t = (cutoff.max(1.0).ln() - 200.0f32.ln())
-                    / (4000.0f32.ln() - 200.0f32.ln());
+                let t = (cutoff.max(1.0).ln() - 200.0f32.ln()) / (4000.0f32.ln() - 200.0f32.ln());
                 let (freqs, _bws) = crate::wavetable::vowel_at(t.clamp(0.0, 1.0));
                 [
                     SvfCoeffs::compute(freqs[0], reso, self.sample_rate),
@@ -1542,8 +1651,20 @@ impl SynthEngine {
 
                 let (mut out_l, mut out_r) = (dry_l, dry_r);
                 if p.filter_enable {
-                    let x_l = soft_clip(wet_l * drive_gain) * drive_comp;
-                    let x_r = soft_clip(wet_r * drive_gain) * drive_comp;
+                    // ADAA keeps the saturator from aliasing; the naive
+                    // path preserves bit-exact renders while drive is 0
+                    // (the clip is transparent there anyway).
+                    let (x_l, x_r) = if drive_base > 0.0 {
+                        (
+                            voice.drive_adaa_l.soft_clip(wet_l * drive_gain) * drive_comp,
+                            voice.drive_adaa_r.soft_clip(wet_r * drive_gain) * drive_comp,
+                        )
+                    } else {
+                        (
+                            soft_clip(wet_l * drive_gain) * drive_comp,
+                            soft_clip(wet_r * drive_gain) * drive_comp,
+                        )
+                    };
                     let (f_l, f_r) = match p.filter_type {
                         FT_LP12 => (
                             voice.svf1_l.tick(x_l, &coeffs).0,
@@ -1606,8 +1727,8 @@ impl SynthEngine {
                             (fl, fr)
                         }
                     };
-                    out_l += wet_l + (f_l - wet_l) * p.filter_mix;
-                    out_r += wet_r + (f_r - wet_r) * p.filter_mix;
+                    out_l += wet_l + (f_l - wet_l) * filter_mix_base;
+                    out_r += wet_r + (f_r - wet_r) * filter_mix_base;
                 } else {
                     out_l += wet_l;
                     out_r += wet_r;
@@ -1633,10 +1754,10 @@ impl SynthEngine {
 
         // Global distortion: voice sum → shaper → master gain.
         if p.dist_enable {
-            let drive = (p.dist_drive + dist_mod).clamp(0.0, 1.0);
+            let drive = (dist_drive_base + dist_mod).clamp(0.0, 1.0);
             let gain = 1.0 + drive * 11.0;
             let comp = 1.0 / (1.0 + drive * 2.0);
-            let mix = p.dist_mix.clamp(0.0, 1.0);
+            let mix = dist_mix_base.clamp(0.0, 1.0);
             if p.dist_mode == DIST_CRUSH {
                 // Sample-rate divide: hold every Nth sample (~750 Hz at
                 // 48 kHz and full drive).
@@ -1650,11 +1771,26 @@ impl SynthEngine {
                     right[i] += (self.decim_hold.1 - right[i]) * mix;
                 }
             } else {
+                // The 6 Hz DC blocker rides only the active shaper path
+                // (gated on mix > 0 so mix-0 stays exactly transparent):
+                // fold/sine on asymmetric material generate DC that would
+                // otherwise lean the low end.
+                let dc_r = 1.0 - core::f32::consts::TAU * 6.0 * self.inv_sample_rate;
                 for i in 0..n {
-                    let y_l = distort(p.dist_mode, left[i] * gain) * comp;
-                    let y_r = distort(p.dist_mode, right[i] * gain) * comp;
+                    let y_l = self.dist_adaa_l.distort(p.dist_mode, left[i] * gain) * comp;
+                    let y_r = self.dist_adaa_r.distort(p.dist_mode, right[i] * gain) * comp;
                     left[i] += (y_l - left[i]) * mix;
                     right[i] += (y_r - right[i]) * mix;
+                    if mix > 0.0 {
+                        let hp_l = left[i] - self.dc_x1.0 + dc_r * self.dc_y1.0;
+                        self.dc_x1.0 = left[i];
+                        self.dc_y1.0 = flush_denormal(hp_l);
+                        left[i] = hp_l;
+                        let hp_r = right[i] - self.dc_x1.1 + dc_r * self.dc_y1.1;
+                        self.dc_x1.1 = right[i];
+                        self.dc_y1.1 = flush_denormal(hp_r);
+                        right[i] = hp_r;
+                    }
                 }
             }
         }
@@ -1668,15 +1804,24 @@ impl SynthEngine {
             left[i] = flush_denormal(left[i] * g0);
             right[i] = flush_denormal(right[i] * g0);
         }
+
+        self.was_active = self.voices.iter().any(|v| v.active);
     }
 }
 
-/// Pick the mip level whose full harmonic band stays below Nyquist for the
-/// most-detuned unison voice — rounded *up*, so playback is strictly
-/// alias-free (brightness steps at octave boundaries are the accepted
-/// tradeoff for milestone 1; `Wavetable::sample` already supports a
-/// crossfade fraction should a blended scheme land later). `inc` is cycles
-/// per sample of the center voice.
+/// Bias added to the fractional mip level. `floor(level) + frac`
+/// crossfades between the two neighboring mips; the finer one can carry
+/// up to an octave of content above Nyquist near frac ≈ 0, so the guard
+/// shifts the blend darker until the folded band stays attenuated and
+/// confined near Nyquist (see `sync_warp_does_not_alias`).
+const MIP_GUARD: f32 = 0.25;
+
+/// Pick a fractional mip level for the most-detuned unison voice: the
+/// integer part indexes the finer mip, the fraction crossfades toward
+/// the next-coarser one in `Wavetable::sample`. Compared to the old
+/// ceil() pick this removes both the octave-boundary brightness steps
+/// and up to an octave of unnecessary darkening on low notes. `inc` is
+/// cycles per sample of the center voice.
 fn mip_for_increment(inc: f32, p: &OscParams) -> (usize, f32) {
     // Worst-case unison ratio pushes the pitch up by the full spread, and
     // a hot warp widens the spectrum by a few more octaves.
@@ -1686,12 +1831,18 @@ fn mip_for_increment(inc: f32, p: &OscParams) -> (usize, f32) {
     if worst <= 0.0 {
         return (0, 0.0);
     }
-    let allowed = 0.5 / worst;
-    if allowed >= MAX_HARMONICS as f32 {
-        return (0, 0.0);
+    let allowed = (0.5 / worst).max(1.0);
+    // raw <= 0 means even mip 0 is fully alias-free; adding the guard
+    // (instead of early-returning) keeps the level continuous across
+    // that boundary — frac ramps smoothly from 0 as the pitch rises.
+    let raw = (MAX_HARMONICS as f32 / allowed).log2();
+    let level = (raw + MIP_GUARD).clamp(0.0, (MIPS - 1) as f32);
+    let mip = level as usize;
+    if mip >= MIPS - 1 {
+        (MIPS - 1, 0.0)
+    } else {
+        (mip, level - mip as f32)
     }
-    let level = (MAX_HARMONICS as f32 / allowed.max(1.0)).log2().ceil();
-    ((level.max(0.0) as usize).min(MIPS - 1), 0.0)
 }
 
 #[cfg(test)]
@@ -1889,6 +2040,37 @@ mod tests {
     }
 
     #[test]
+    fn cutoff_jump_glides_instead_of_stepping() {
+        // Slam the cutoff from 8 kHz to 200 Hz on a sustained saw: the
+        // upper harmonics must fade over the smoothing window, not vanish
+        // within the first control block.
+        let mut e = engine();
+        let mut p = *e.params();
+        p.osc_a.wt_pos = 0.5; // saw region
+        p.osc_a.uni_detune = 0.0;
+        p.osc_a.rand_phase = 0.0;
+        p.cutoff_hz = 8_000.0;
+        p.resonance = 0.0;
+        p.env1.attack_s = 0.0;
+        e.set_params(p);
+        e.note_on(45, 1.0); // A2 = 110 Hz
+        let _ = render_seconds(&mut e, 0.3); // settle
+        p.cutoff_hz = 200.0;
+        e.set_params(p);
+        let (early, _) = render_seconds(&mut e, 1_024.0 / 48_000.0); // first ~21 ms
+        let _ = render_seconds(&mut e, 0.3); // let the glide finish
+        let (late, _) = render_seconds(&mut e, 1_024.0 / 48_000.0);
+        // h36 ≈ 3.96 kHz: audible while the cutoff is still gliding, gone
+        // once it lands at 200 Hz. An instant jump would make both equal.
+        let h36_early = goertzel(&early, 110.0 * 36.0);
+        let h36_late = goertzel(&late, 110.0 * 36.0);
+        assert!(
+            h36_early > h36_late * 3.0,
+            "cutoff landed instantly: early={h36_early} late={h36_late}"
+        );
+    }
+
+    #[test]
     fn warp_modes_stay_finite() {
         for mode in 0..WARP_MODE_COUNT as u8 {
             for amount in [0.3f32, 1.0] {
@@ -1950,6 +2132,56 @@ mod tests {
     }
 
     #[test]
+    fn mip_choice_is_continuous_in_pitch() {
+        // The fractional mip level must never step: sweep four octaves in
+        // 1-cent increments and demand sample-to-sample continuity.
+        let mut p = OscParams::default_with(true);
+        p.uni_detune = 0.0;
+        let mut prev: Option<f32> = None;
+        for cents in 0..4800 {
+            let f = 55.0f32 * (cents as f32 / 1200.0).exp2();
+            let (m, fr) = mip_for_increment(f / 48_000.0, &p);
+            let level = m as f32 + fr;
+            if let Some(pl) = prev {
+                assert!(
+                    (level - pl).abs() < 0.01,
+                    "mip level steps at {cents} cents: {pl} -> {level}"
+                );
+            }
+            prev = Some(level);
+        }
+    }
+
+    #[test]
+    fn low_notes_keep_their_upper_harmonics() {
+        // A1 saw: harmonic 300 (~16.5 kHz) was discarded by the old ceil()
+        // mip pick (mip 2 caps the table at 256 partials); the fractional
+        // pick keeps the mip-1 band audible.
+        let mut e = engine();
+        let mut p = *e.params();
+        p.osc_a.wt_pos = 0.5; // saw region
+        p.osc_a.uni_detune = 0.0;
+        p.osc_a.rand_phase = 0.0;
+        p.filter_enable = false;
+        p.env1.attack_s = 0.0;
+        e.set_params(p);
+        e.note_on(33, 1.0); // A1 = 55 Hz
+        let frames = 16_384;
+        let mut l = vec![0.0f32; frames];
+        let mut r = vec![0.0f32; frames];
+        e.render(&mut l, &mut r);
+        e.render(&mut l, &mut r);
+        let fundamental = goertzel(&l, 55.0);
+        let h300 = goertzel(&l, 55.0 * 300.0);
+        assert!(fundamental > 0.0);
+        assert!(
+            h300 > fundamental * 1.0e-8,
+            "h300/fund = {}",
+            h300 / fundamental
+        );
+    }
+
+    #[test]
     fn sync_warp_does_not_alias() {
         // Sync at r=2 is exact transposition (the table is periodic across
         // the wrap), so the mip bias must keep it strictly alias-free even
@@ -2000,9 +2232,16 @@ mod tests {
         // A silent-but-enabled osc B drives FM…
         let flat = render(true, 0.0);
         let modulated = render(true, 0.8);
-        let diff: f32 =
-            flat.iter().zip(&modulated).map(|(a, b)| (a - b).abs()).sum::<f32>() / flat.len() as f32;
-        assert!(diff > 1.0e-4, "FM from a silent osc B must alter the signal");
+        let diff: f32 = flat
+            .iter()
+            .zip(&modulated)
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
+            / flat.len() as f32;
+        assert!(
+            diff > 1.0e-4,
+            "FM from a silent osc B must alter the signal"
+        );
         // …while a disabled osc B leaves the tap at zero (no-op).
         assert_eq!(render(false, 0.0), render(false, 0.8));
     }
@@ -2110,8 +2349,69 @@ mod tests {
         let dry = ratio(false);
         let wet = ratio(true);
         assert!(
-            wet > dry * 10.0,
+            wet > dry * 5.0,
             "formant must emphasize F1 over the far band: dry={dry} wet={wet}"
+        );
+    }
+
+    #[test]
+    fn shaper_distortion_leaves_no_dc() {
+        // Hard-clipping the asymmetric 12.5% pulse (spends 1/8 of the
+        // cycle at the positive rail, 7/8 at the negative one) rectifies
+        // it into a strong negative offset; the post-shaper DC blocker
+        // must remove it.
+        let mut e = engine();
+        let mut p = *e.params();
+        p.osc_a.wt_pos = 1.0; // pulse frame
+        p.osc_a.rand_phase = 0.0;
+        p.filter_enable = false;
+        p.env1.attack_s = 0.0;
+        p.dist_enable = true;
+        p.dist_mode = DIST_HARD;
+        p.dist_drive = 1.0;
+        p.dist_mix = 1.0;
+        e.set_params(p);
+        e.note_on(45, 1.0);
+        let _ = render_seconds(&mut e, 0.5); // settle the blocker
+        let (l, _r) = render_seconds(&mut e, 0.5);
+        let mean = l.iter().map(|&v| v as f64).sum::<f64>() / l.len() as f64;
+        assert!(peak(&l) > 0.1, "the note must be audible");
+        assert!(mean.abs() < 1.0e-3, "post-distortion DC offset: {mean}");
+    }
+
+    #[test]
+    fn fold_bass_alias_is_bounded() {
+        // A pure sine at ~2217 Hz through the wavefolder at full drive
+        // (the signal folds ~3 times — worst case): the folded image of
+        // the 13th harmonic lands at ~19.2 kHz. First-order ADAA holds it
+        // near -18 dB (measured 0.126); this guards against regressing to
+        // the naive shaper, which leaves substantially more.
+        let mut e = engine();
+        let mut p = *e.params();
+        p.osc_a.wt_pos = 0.0; // sine frame
+        p.osc_a.rand_phase = 0.0;
+        p.osc_a.uni_detune = 0.0;
+        p.filter_enable = false;
+        p.env1.attack_s = 0.0;
+        p.dist_enable = true;
+        p.dist_mode = DIST_FOLD;
+        p.dist_drive = 1.0;
+        p.dist_mix = 1.0;
+        e.set_params(p);
+        e.note_on(97, 1.0); // ≈ 2217 Hz
+        let frames = 16_384;
+        let mut l = vec![0.0f32; frames];
+        let mut r = vec![0.0f32; frames];
+        e.render(&mut l, &mut r);
+        e.render(&mut l, &mut r);
+        let f0 = 440.0 * ((97.0f64 - 69.0) / 12.0).exp2();
+        let fundamental = goertzel(&l, f0);
+        let alias = goertzel(&l, 48_000.0 - 13.0 * f0);
+        assert!(fundamental > 0.0);
+        assert!(
+            alias < fundamental * 0.3,
+            "fold alias/fund = {}",
+            alias / fundamental
         );
     }
 

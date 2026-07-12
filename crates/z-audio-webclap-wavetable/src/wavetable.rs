@@ -212,36 +212,41 @@ fn build_table(table: usize) -> Wavetable {
         };
         render_mips(&recipe, &mut data, frame);
     }
-    Wavetable { data }
-}
-
-/// Render every mip of one frame (inverse-FFT synthesis), then normalize
-/// the full-band mip to ±1 and apply the same gain to all mips (so
-/// switching mip never changes loudness).
-fn render_mips(recipe: &Recipe, data: &mut [f32], frame: usize) {
-    let base = (frame * MIPS) * FRAME_LEN;
-    {
-        let (mip0, rest) = data[base..].split_at_mut(FRAME_LEN);
-        // Full-band render once; coarser mips re-render with truncated
-        // harmonic counts.
-        synthesize(recipe, MAX_HARMONICS, mip0);
-        let mut level = 1usize;
-        let mut chunks = rest.chunks_exact_mut(FRAME_LEN);
-        while level < MIPS {
-            let out = chunks.next().expect("MIPS-1 chunks after mip 0");
-            synthesize(recipe, MAX_HARMONICS >> level, out);
-            level += 1;
-        }
-    }
+    // One gain for the whole table: peak measured across every frame's
+    // full-band mip, applied to all frames and mips, so neither morphing
+    // nor mip switching ever changes loudness.
     let mut peak = 0.0f32;
-    for &v in &data[base..base + FRAME_LEN] {
-        peak = peak.max(v.abs());
+    for frame in 0..FRAMES {
+        let base = (frame * MIPS) * FRAME_LEN;
+        for &v in &data[base..base + FRAME_LEN] {
+            peak = peak.max(v.abs());
+        }
     }
     if peak > 1.0e-9 {
         let g = 1.0 / peak;
-        for v in &mut data[base..base + MIPS * FRAME_LEN] {
+        for v in &mut data {
             *v *= g;
         }
+    }
+    Wavetable { data }
+}
+
+/// Render every mip of one frame (inverse-FFT synthesis). Normalization
+/// happens once per table in `build_table` — a single gain across all
+/// frames and mips, so neither morphing nor mip switching changes
+/// loudness.
+fn render_mips(recipe: &Recipe, data: &mut [f32], frame: usize) {
+    let base = (frame * MIPS) * FRAME_LEN;
+    let (mip0, rest) = data[base..].split_at_mut(FRAME_LEN);
+    // Full-band render once; coarser mips re-render with truncated
+    // harmonic counts.
+    synthesize(recipe, MAX_HARMONICS, mip0);
+    let mut level = 1usize;
+    let mut chunks = rest.chunks_exact_mut(FRAME_LEN);
+    while level < MIPS {
+        let out = chunks.next().expect("MIPS-1 chunks after mip 0");
+        synthesize(recipe, MAX_HARMONICS >> level, out);
+        level += 1;
     }
 }
 
@@ -389,13 +394,16 @@ fn basic_shapes(morph: f32) -> Recipe {
                 }
             }
             _ => {
-                // 12.5% pulse: sin(π h d)/h series
+                // 12.5% pulse, cosine phase: the true centered pulse shape.
+                // (Sine phase would scramble the partials into a waveform
+                // with a ~4.6 crest factor — same spectrum, but it starves
+                // the normalizer and hits drive stages badly.)
                 let d = 0.125f32;
                 for h in 1..=MAX_HARMONICS {
                     let a_h = (core::f32::consts::PI * h as f32 * d).sin()
                         * (4.0 / core::f32::consts::PI)
                         / h as f32;
-                    r.sin_amp[h - 1] += w * a_h;
+                    r.cos_amp[h - 1] += w * a_h;
                 }
             }
         }
@@ -403,12 +411,14 @@ fn basic_shapes(morph: f32) -> Recipe {
     r
 }
 
-/// Pulse-width morph 50% → 5%.
+/// Pulse-width morph 50% → 5%. Cosine phase renders the true centered
+/// pulse (low crest factor); sine phase would smear it into a spiky
+/// pseudo-pulse that dominates the table normalizer.
 fn pwm(morph: f32) -> Recipe {
     let mut r = Recipe::new();
     let d = 0.5 - 0.45 * morph;
     for h in 1..=MAX_HARMONICS {
-        r.sin_amp[h - 1] =
+        r.cos_amp[h - 1] =
             (core::f32::consts::PI * h as f32 * d).sin() * (4.0 / core::f32::consts::PI) / h as f32;
     }
     r
@@ -948,8 +958,7 @@ fn string_machine(morph: f32) -> Recipe {
     for h in 1..=512.min(MAX_HARMONICS) {
         let hf = h as f32;
         let comb = 0.55
-            + 0.45
-                * (core::f32::consts::TAU * hf / 9.0 + core::f32::consts::TAU * morph).cos();
+            + 0.45 * (core::f32::consts::TAU * hf / 9.0 + core::f32::consts::TAU * morph).cos();
         let a = comb / hf.powf(p);
         r.sin_amp[h - 1] = a;
         r.cos_amp[h - 1] = 0.2 * a * (core::f32::consts::TAU * hash01(h as u32 * 3)).sin();
@@ -1077,19 +1086,37 @@ mod tests {
     }
 
     #[test]
-    fn every_frame_is_normalized_and_finite() {
+    fn tables_are_normalized_and_finite() {
+        // Normalization is per table: every frame stays within ±1 and the
+        // loudest frame of each table sits at the normalization target.
         let set = WavetableSet::factory();
         for t in 0..TABLE_COUNT {
+            let mut table_peak = 0.0f32;
             for f in 0..FRAMES {
                 let frame = set.table(t).frame(f, 0);
                 let peak = frame.iter().fold(0.0f32, |m, v| m.max(v.abs()));
                 assert!(frame.iter().all(|v| v.is_finite()));
-                assert!(
-                    (0.9..=1.0001).contains(&peak),
-                    "table {t} frame {f} peak {peak}"
-                );
+                assert!(peak <= 1.0001, "table {t} frame {f} peak {peak}");
+                table_peak = table_peak.max(peak);
             }
+            assert!(
+                (0.9..=1.0001).contains(&table_peak),
+                "table {t} peak {table_peak}"
+            );
         }
+    }
+
+    #[test]
+    fn normalization_is_per_table_not_per_frame() {
+        // PWM: the narrow-pulse frame sets the table peak, so the square
+        // frame must sit well below 1.0 (per-frame norm would put it at ~1).
+        let set = WavetableSet::factory();
+        let square = set.table(1).frame(0, 0);
+        let peak = square.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        assert!(
+            peak < 0.9,
+            "PWM frame 0 peak {peak} suggests per-frame normalization"
+        );
     }
 
     #[test]
@@ -1098,8 +1125,10 @@ mod tests {
         let frame = set.table(0).frame(0, 0);
         let fundamental = harmonic_power(frame, 1);
         let second = harmonic_power(frame, 2);
-        assert!(fundamental > 0.9);
-        assert!(second < 1.0e-8);
+        // The table gain is set by the loudest frame (the 12.5% pulse), so
+        // the sine frame sits below full scale — assert purity, not level.
+        assert!(fundamental > 0.2);
+        assert!(second < fundamental * 1.0e-6);
     }
 
     #[test]
@@ -1241,7 +1270,7 @@ mod tests {
         let f = set.table(31).frame(0, 0);
         let fund = harmonic_power(f, 1);
         let third = harmonic_power(f, 3);
-        assert!(fund > 0.8);
+        assert!(fund > 0.5);
         assert!(third < fund * 0.05, "third/fund = {}", third / fund);
     }
 
