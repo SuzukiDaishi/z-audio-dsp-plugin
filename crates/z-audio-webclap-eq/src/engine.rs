@@ -836,23 +836,26 @@ mod tests {
         let half = input.len() / 2;
         let (mut l, mut r) = (vec![0.0; input.len()], vec![0.0; input.len()]);
         e.process(&input[..half], &input[..half], &mut l[..half], &mut r[..half]);
-        let base_delta = l[100..half]
-            .windows(2)
-            .map(|w| (w[1] - w[0]).abs())
-            .fold(0.0f32, f32::max);
         p.bands[0].gain_db = 18.0;
         e.set_params(p);
+        let last = l[half - 1];
         let (l2, r2) = (&mut l[half..], &mut r[half..]);
         e.process(&input[half..], &input[half..], l2, r2);
-        let jump_delta = l2
+        // The transition region must never step harder than the post-jump
+        // steady signal itself moves (unsmoothed, the kernel swap jumps
+        // the level ~8x in one sample).
+        let settle = 4_000; // ~83 ms >> every tau involved
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
             .windows(2)
             .map(|w| (w[1] - w[0]).abs())
             .fold(0.0f32, f32::max);
-        // Unsmoothed, an +18 dB kernel swap steps the level ~8x in one
-        // sample; smoothed it must stay within the enlarged steady slope.
         assert!(
-            jump_delta < base_delta * 9.0,
-            "zipper step {jump_delta} vs steady {base_delta}"
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
         );
     }
 

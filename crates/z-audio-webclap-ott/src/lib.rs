@@ -11,8 +11,8 @@
 use std::sync::OnceLock;
 
 use wclap_plugin::{
-    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus,
-    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED,
+    init_plugin, silence, ParamDef, Plugin, PluginDef, ProcessCtx, ProcessStatus, Smoothed,
+    PARAM_IS_AUTOMATABLE, PARAM_IS_STEPPED, TAU_FREQ, TAU_GAIN,
 };
 
 pub const P_DEPTH: u32 = 940;
@@ -232,40 +232,70 @@ impl Crossover {
     }
 }
 
+/// Crossover smoothers tick once per this many samples; the biquads are
+/// only reconfigured while a frequency is still gliding.
+const XOVER_CHUNK: usize = 32;
+
 pub struct OttEngine {
     params: OttParams,
     sample_rate: f32,
     xover_l: Crossover,
     xover_r: Crossover,
-    /// Configured crossover frequencies (rebuilt when the params move).
-    configured: (f32, f32),
     /// Per-band stereo-linked envelope (linear peak).
     env: [f32; 3],
+    /// Anti-zipper smoothing: gains per sample, crossover freqs per chunk.
+    sm_in: Smoothed,
+    sm_out: Smoothed,
+    sm_band: [Smoothed; 3],
+    sm_depth: Smoothed,
+    sm_up: Smoothed,
+    sm_down: Smoothed,
+    sm_xlow: Smoothed,
+    sm_xhigh: Smoothed,
+    snapped: bool,
 }
 
 impl OttEngine {
     pub fn new(sample_rate: f32) -> Self {
         let sr = sample_rate.max(1.0);
         let p = OttParams::default();
+        let gain = || {
+            let mut s = Smoothed::new(0.0);
+            s.configure(sr, TAU_GAIN);
+            s
+        };
+        let mut sm_xlow = Smoothed::new(p.xover_low_hz);
+        sm_xlow.configure(sr / XOVER_CHUNK as f32, TAU_FREQ);
+        let mut sm_xhigh = Smoothed::new(p.xover_high_hz);
+        sm_xhigh.configure(sr / XOVER_CHUNK as f32, TAU_FREQ);
         let mut e = Self {
             params: p,
             sample_rate: sr,
             xover_l: Crossover::default(),
             xover_r: Crossover::default(),
-            configured: (0.0, 0.0),
             env: [0.0; 3],
+            sm_in: gain(),
+            sm_out: gain(),
+            sm_band: [gain(), gain(), gain()],
+            sm_depth: gain(),
+            sm_up: gain(),
+            sm_down: gain(),
+            sm_xlow,
+            sm_xhigh,
+            snapped: false,
         };
         e.reconfigure();
         e
     }
 
-    fn reconfigure(&mut self) {
+    /// Configure the crossovers from the target params — used on
+    /// activation and when the first processed block snaps the smoothers.
+    pub fn reconfigure(&mut self) {
         let p = self.params;
         self.xover_l
             .configure(p.xover_low_hz, p.xover_high_hz, self.sample_rate);
         self.xover_r
             .configure(p.xover_low_hz, p.xover_high_hz, self.sample_rate);
-        self.configured = (p.xover_low_hz, p.xover_high_hz);
     }
 
     pub fn params(&self) -> &OttParams {
@@ -274,59 +304,96 @@ impl OttEngine {
 
     pub fn set_params(&mut self, p: OttParams) {
         self.params = p;
-        if self.configured != (p.xover_low_hz, p.xover_high_hz) {
-            self.reconfigure();
-        }
     }
 
     pub fn reset(&mut self) {
         self.xover_l.clear();
         self.xover_r.clear();
         self.env = [0.0; 3];
+        self.snapped = false;
     }
 
     pub fn process(&mut self, in_l: &[f32], in_r: &[f32], out_l: &mut [f32], out_r: &mut [f32]) {
         let p = self.params;
-        let in_gain = db_to_gain(p.in_gain_db);
-        let out_gain = db_to_gain(p.out_gain_db);
-        let band_gain = [
-            db_to_gain(p.band_gain_db[0]),
-            db_to_gain(p.band_gain_db[1]),
-            db_to_gain(p.band_gain_db[2]),
-        ];
+        self.sm_in.set_target(db_to_gain(p.in_gain_db));
+        self.sm_out.set_target(db_to_gain(p.out_gain_db));
+        for b in 0..3 {
+            self.sm_band[b].set_target(db_to_gain(p.band_gain_db[b]));
+        }
+        self.sm_depth.set_target(p.depth);
+        self.sm_up.set_target(p.upward);
+        self.sm_down.set_target(p.downward);
+        self.sm_xlow.set_target(p.xover_low_hz);
+        self.sm_xhigh.set_target(p.xover_high_hz);
+        if !self.snapped {
+            self.sm_in.snap();
+            self.sm_out.snap();
+            for b in &mut self.sm_band {
+                b.snap();
+            }
+            self.sm_depth.snap();
+            self.sm_up.snap();
+            self.sm_down.snap();
+            self.sm_xlow.snap();
+            self.sm_xhigh.snap();
+            self.reconfigure();
+            self.snapped = true;
+        }
         // OTT-fast ballistics, scaled by the Time knob.
         let atk = 1.0 - (-1.0 / (0.003 * p.time * self.sample_rate)).exp();
         let rel = 1.0 - (-1.0 / (0.080 * p.time * self.sample_rate)).exp();
 
-        for i in 0..out_l.len() {
-            let xl = in_l[i] * in_gain;
-            let xr = in_r[i] * in_gain;
-            let bl = self.xover_l.split(xl);
-            let br = self.xover_r.split(xr);
-            let bands_l = [bl.0, bl.1, bl.2];
-            let bands_r = [br.0, br.1, br.2];
-
-            let mut yl = 0.0f32;
-            let mut yr = 0.0f32;
-            for b in 0..3 {
-                // Stereo-linked peak follower.
-                let level = bands_l[b].abs().max(bands_r[b].abs());
-                let coeff = if level > self.env[b] { atk } else { rel };
-                self.env[b] += (level - self.env[b]) * coeff;
-
-                let level_db = gain_to_db(self.env[b]);
-                let mut gain_db = 0.0f32;
-                if level_db > TARGET_DB {
-                    gain_db -= (level_db - TARGET_DB) * DOWN_SLOPE * p.depth * p.downward;
-                } else {
-                    gain_db += (TARGET_DB - level_db) * UP_SLOPE * p.depth * p.upward;
-                }
-                let g = db_to_gain(gain_db.clamp(-MAX_GAIN_DB, MAX_GAIN_DB)) * band_gain[b];
-                yl += bands_l[b] * g;
-                yr += bands_r[b] * g;
+        let n = out_l.len();
+        let mut at = 0;
+        while at < n {
+            let m = XOVER_CHUNK.min(n - at);
+            if !(self.sm_xlow.is_settled(0.5) && self.sm_xhigh.is_settled(0.5)) {
+                let f_low = self.sm_xlow.tick();
+                let f_high = self.sm_xhigh.tick();
+                self.xover_l.configure(f_low, f_high, self.sample_rate);
+                self.xover_r.configure(f_low, f_high, self.sample_rate);
             }
-            out_l[i] = yl * out_gain;
-            out_r[i] = yr * out_gain;
+            for i in at..at + m {
+                let in_gain = self.sm_in.tick();
+                let out_gain = self.sm_out.tick();
+                let band_gain = [
+                    self.sm_band[0].tick(),
+                    self.sm_band[1].tick(),
+                    self.sm_band[2].tick(),
+                ];
+                let depth = self.sm_depth.tick();
+                let upward = self.sm_up.tick();
+                let downward = self.sm_down.tick();
+                let xl = in_l[i] * in_gain;
+                let xr = in_r[i] * in_gain;
+                let bl = self.xover_l.split(xl);
+                let br = self.xover_r.split(xr);
+                let bands_l = [bl.0, bl.1, bl.2];
+                let bands_r = [br.0, br.1, br.2];
+
+                let mut yl = 0.0f32;
+                let mut yr = 0.0f32;
+                for b in 0..3 {
+                    // Stereo-linked peak follower.
+                    let level = bands_l[b].abs().max(bands_r[b].abs());
+                    let coeff = if level > self.env[b] { atk } else { rel };
+                    self.env[b] += (level - self.env[b]) * coeff;
+
+                    let level_db = gain_to_db(self.env[b]);
+                    let mut gain_db = 0.0f32;
+                    if level_db > TARGET_DB {
+                        gain_db -= (level_db - TARGET_DB) * DOWN_SLOPE * depth * downward;
+                    } else {
+                        gain_db += (TARGET_DB - level_db) * UP_SLOPE * depth * upward;
+                    }
+                    let g = db_to_gain(gain_db.clamp(-MAX_GAIN_DB, MAX_GAIN_DB)) * band_gain[b];
+                    yl += bands_l[b] * g;
+                    yr += bands_r[b] * g;
+                }
+                out_l[i] = yl * out_gain;
+                out_r[i] = yr * out_gain;
+            }
+            at += m;
         }
     }
 }
@@ -470,6 +537,36 @@ mod tests {
         let re = s1 - s2 * w.cos();
         let im = s2 * w.sin();
         re * re + im * im
+    }
+
+    #[test]
+    fn output_gain_jump_is_smoothed() {
+        // Jump out gain +24 dB mid-render: the output must glide, not step.
+        let mut e = defaults();
+        let n = 9_600;
+        let input = sine(n, 200.0, 0.3);
+        let (mut l, mut r) = (vec![0.0; n], vec![0.0; n]);
+        let half = n / 2;
+        e.process(&input[..half], &input[..half], &mut l[..half], &mut r[..half]);
+        let mut p = *e.params();
+        p.out_gain_db = 24.0;
+        e.set_params(p);
+        let last = l[half - 1];
+        let (l2, r2) = (&mut l[half..], &mut r[half..]);
+        e.process(&input[half..], &input[half..], l2, r2);
+        let settle = 2_000;
+        let jump_delta = l2[..settle]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold((l2[0] - last).abs(), f32::max);
+        let steady_after = l2[settle..]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            jump_delta < steady_after * 1.5 + 0.02,
+            "zipper step {jump_delta} vs post-jump steady {steady_after}"
+        );
     }
 
     #[test]
