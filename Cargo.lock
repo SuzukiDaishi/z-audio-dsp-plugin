@@ -5125,6 +5125,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "z-audio-webclap-vocoder"
+version = "0.1.0"
+dependencies = [
+ "wclap-plugin",
+]
+
+[[package]]
 name = "z-audio-webclap-wavetable"
 version = "0.1.0"
 dependencies = [

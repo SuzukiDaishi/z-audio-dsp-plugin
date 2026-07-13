@@ -34,6 +34,7 @@ const DEFAULT_SHELF_BUNDLES = [
   ["Phaser", "../../target/webclap/z-audio-phaser.wclap.tar.gz"],
   ["Tremolo", "../../target/webclap/z-audio-tremolo.wclap.tar.gz"],
   ["Gate", "../../target/webclap/z-audio-gate.wclap.tar.gz"],
+  ["Vocoder", "../../target/webclap/z-audio-vocoder.wclap.tar.gz"],
   ["Diffuser", "../../target/webclap/z-audio-diffuser.wclap.tar.gz"],
   ["Reverb", "../../target/webclap/z-audio-parametric-reverb.wclap.tar.gz"],
   ["Limiter", "../../target/webclap/z-audio-limiter.wclap.tar.gz"],
@@ -1277,6 +1278,9 @@ function slotSummary(slot) {
 
 function pluginFlow(slot) {
   const features = pluginFeatures(slot);
+  if (features.includes("audio-effect") && features.includes("note-effect")) {
+    return "Audio + MIDI -> Audio";
+  }
   if (features.includes("note-effect")) return "MIDI -> MIDI";
   if (features.includes("instrument")) return "MIDI -> Audio";
   if (features.includes("note-detector")) return "Audio -> MIDI";

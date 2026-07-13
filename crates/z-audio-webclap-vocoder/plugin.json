@@ -1,0 +1,27 @@
+{
+  "manifest_version": 1,
+  "id": "dev.zaudio.vocoder",
+  "name": "Z Audio Vocoder",
+  "vendor": "zukky",
+  "version": "0.1.0",
+  "description": "Classic channel vocoder: a MIDI/free-run oscillator carrier shaped by the input's band envelopes, with noise blend and formant shift.",
+  "features": ["audio-effect", "note-effect", "stereo"],
+  "license": "MIT",
+  "homepage": "https://github.com/SuzukiDaishi/z-audio-dsp",
+  "source": "src/",
+  "artifact": "../../target/wasm32-unknown-unknown/release/z_audio_webclap_vocoder.wasm",
+  "format": "wasm",
+  "has_ui": true,
+  "ui": {
+    "compact_size": { "width": 760, "height": 560 },
+    "expanded_size": { "width": 980, "height": 700 }
+  },
+  "plugins": [
+    {
+      "id": "dev.zaudio.vocoder",
+      "name": "Z Audio Vocoder",
+      "features": ["audio-effect", "note-effect", "stereo"],
+      "has_ui": true
+    }
+  ]
+}
