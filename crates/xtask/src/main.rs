@@ -161,6 +161,12 @@ const WEBCLAP_BUNDLES: &[WebClapBundle] = &[
         crate_dir: "crates/z-audio-webclap-ott",
         wasm_file: "z_audio_webclap_ott.wasm",
     },
+    WebClapBundle {
+        package: "z-audio-webclap-vocoder",
+        bundle_name: "z-audio-vocoder.wclap",
+        crate_dir: "crates/z-audio-webclap-vocoder",
+        wasm_file: "z_audio_webclap_vocoder.wasm",
+    },
 ];
 
 fn main() -> nih_plug_xtask::Result<()> {

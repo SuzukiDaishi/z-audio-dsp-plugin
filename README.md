@@ -34,6 +34,9 @@ This workspace builds native and WebCLAP wrappers for:
 - `Z Audio Phaser`: 2-12 stage stereo phaser, WebCLAP only
 - `Z Audio Tremolo`: tremolo / auto-pan with stereo LFO phase, WebCLAP only
 - `Z Audio Gate`: noise gate with hold and range, WebCLAP only
+- `Z Audio Vocoder`: classic channel vocoder — MIDI/free-run oscillator
+  carrier shaped by the input's band envelopes, with noise blend, formant
+  shift, and a live band-envelope display, WebCLAP only
 
 Supported plugin formats:
 
@@ -375,6 +378,7 @@ two sliders are inactive.
 | Z Audio Phaser | `dev.zaudio.phaser` | — (WebCLAP only) | `z-audio-phaser.wclap.tar.gz` |
 | Z Audio Tremolo | `dev.zaudio.tremolo` | — (WebCLAP only) | `z-audio-tremolo.wclap.tar.gz` |
 | Z Audio Gate | `dev.zaudio.gate` | — (WebCLAP only) | `z-audio-gate.wclap.tar.gz` |
+| Z Audio Vocoder | `dev.zaudio.vocoder` | — (WebCLAP only) | `z-audio-vocoder.wclap.tar.gz` |
 
 ## Parameters
 

@@ -1,0 +1,13 @@
+[package]
+name = "z-audio-webclap-vocoder"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+description = "Z Audio Vocoder packaged as a WCLAP plugin."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wclap-plugin = { path = "../wclap-plugin", default-features = false }

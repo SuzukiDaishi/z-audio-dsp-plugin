@@ -29,6 +29,7 @@ SHELF_LABELS = {
     "z-audio-phaser": "Phaser",
     "z-audio-tremolo": "Tremolo",
     "z-audio-gate": "Gate",
+    "z-audio-vocoder": "Vocoder",
     "z-audio-diffuser": "Diffuser",
     "z-audio-parametric-reverb": "Reverb",
     "z-audio-limiter": "Limiter",
