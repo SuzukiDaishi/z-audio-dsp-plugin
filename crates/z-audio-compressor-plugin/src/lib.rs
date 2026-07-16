@@ -5,9 +5,9 @@ use std::sync::{
 
 use nih_plug::prelude::*;
 use nih_plug_egui::EguiState;
-use z_audio_dsp::{
-    Compressor, CompressorParams, DetectorMode, Effect, ParamId,
-    ProcessContext as DspProcessContext,
+use z_audio_dsp::{DetectorMode, ParamId};
+use z_audio_webclap_compressor::engine::{
+    EnhancedCompressor, EnhancedCompressorParams, MAX_LOOKAHEAD_MS, SC_HPF_OFF_HZ,
 };
 
 mod editor;
@@ -52,6 +52,16 @@ pub struct ZAudioCompressorParams {
     detector: EnumParam<DetectorModeParam>,
     #[id = "compressor_stereo_link"]
     stereo_link: FloatParam,
+    #[id = "compressor_sc_hpf"]
+    sc_hpf: FloatParam,
+    #[id = "compressor_lookahead"]
+    lookahead: FloatParam,
+    #[id = "compressor_auto_release"]
+    auto_release: BoolParam,
+    #[id = "compressor_auto_makeup"]
+    auto_makeup: BoolParam,
+    #[id = "compressor_warmth"]
+    warmth: FloatParam,
 }
 
 impl Default for ZAudioCompressorParams {
@@ -68,6 +78,30 @@ impl Default for ZAudioCompressorParams {
             mix: float_param(ParamId::CompressorMix, "Mix", ""),
             detector: EnumParam::new("Detector", DetectorModeParam::Peak),
             stereo_link: float_param(ParamId::CompressorStereoLink, "Stereo Link", ""),
+            sc_hpf: FloatParam::new(
+                "SC HPF",
+                SC_HPF_OFF_HZ,
+                FloatRange::Skewed {
+                    min: SC_HPF_OFF_HZ,
+                    max: 500.0,
+                    factor: FloatRange::skew_factor(-1.0),
+                },
+            )
+            .with_unit(" Hz")
+            .with_smoother(SmoothingStyle::Linear(10.0)),
+            lookahead: FloatParam::new(
+                "Lookahead",
+                0.0,
+                FloatRange::Linear {
+                    min: 0.0,
+                    max: MAX_LOOKAHEAD_MS,
+                },
+            )
+            .with_unit(" ms"),
+            auto_release: BoolParam::new("Auto Release", true),
+            auto_makeup: BoolParam::new("Auto Makeup", false),
+            warmth: FloatParam::new("Warmth", 0.15, FloatRange::Linear { min: 0.0, max: 1.0 })
+                .with_smoother(SmoothingStyle::Linear(10.0)),
         }
     }
 }
@@ -114,15 +148,16 @@ impl MeterState {
 pub struct ZAudioCompressor {
     params: Arc<ZAudioCompressorParams>,
     meters: Arc<MeterState>,
-    compressor: Compressor,
+    compressor: EnhancedCompressor,
     sample_rate: f32,
     max_block_size: usize,
     mono_right: Vec<f32>,
+    reported_latency: u32,
 }
 
 impl Default for ZAudioCompressor {
     fn default() -> Self {
-        let mut compressor = Compressor::default();
+        let mut compressor = EnhancedCompressor::default();
         compressor.prepare(48_000.0, 512);
         Self {
             params: Arc::new(ZAudioCompressorParams::default()),
@@ -131,13 +166,14 @@ impl Default for ZAudioCompressor {
             sample_rate: 48_000.0,
             max_block_size: 512,
             mono_right: vec![0.0; 512],
+            reported_latency: 0,
         }
     }
 }
 
 impl ZAudioCompressor {
     fn sync_params(&mut self) {
-        self.compressor.set_params(CompressorParams {
+        self.compressor.set_params(EnhancedCompressorParams {
             input_gain_db: self.params.input_gain.value(),
             threshold_db: self.params.threshold.value(),
             ratio: self.params.ratio.value(),
@@ -148,6 +184,11 @@ impl ZAudioCompressor {
             mix: self.params.mix.value(),
             detector_mode: self.params.detector.value().into(),
             stereo_link: self.params.stereo_link.value(),
+            sc_hpf_hz: self.params.sc_hpf.value(),
+            lookahead_ms: self.params.lookahead.value(),
+            auto_release: self.params.auto_release.value(),
+            auto_makeup: self.params.auto_makeup.value(),
+            warmth: self.params.warmth.value(),
         });
     }
 }
@@ -198,7 +239,12 @@ impl Plugin for ZAudioCompressor {
                     z_audio_webview_editor::map(146, p.makeup_gain.as_ptr()),
                     z_audio_webview_editor::map(147, p.mix.as_ptr()),
                     z_audio_webview_editor::map(148, p.detector.as_ptr()),
-                    z_audio_webview_editor::map(149, p.stereo_link.as_ptr())
+                    z_audio_webview_editor::map(149, p.stereo_link.as_ptr()),
+                    z_audio_webview_editor::map(980, p.sc_hpf.as_ptr()),
+                    z_audio_webview_editor::map(981, p.lookahead.as_ptr()),
+                    z_audio_webview_editor::map(982, p.auto_release.as_ptr()),
+                    z_audio_webview_editor::map(983, p.auto_makeup.as_ptr()),
+                    z_audio_webview_editor::map(984, p.warmth.as_ptr())
                 ]
             );
         }
@@ -210,7 +256,7 @@ impl Plugin for ZAudioCompressor {
         &mut self,
         _audio_io_layout: &AudioIOLayout,
         buffer_config: &BufferConfig,
-        _context: &mut impl InitContext<Self>,
+        context: &mut impl InitContext<Self>,
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
         self.max_block_size = buffer_config.max_buffer_size as usize;
@@ -220,6 +266,8 @@ impl Plugin for ZAudioCompressor {
         self.compressor
             .prepare(self.sample_rate, self.max_block_size);
         self.sync_params();
+        self.reported_latency = self.compressor.latency_samples();
+        context.set_latency_samples(self.reported_latency);
         true
     }
 
@@ -231,30 +279,34 @@ impl Plugin for ZAudioCompressor {
         &mut self,
         buffer: &mut Buffer,
         _aux: &mut AuxiliaryBuffers,
-        _context: &mut impl ProcessContext<Self>,
+        context: &mut impl ProcessContext<Self>,
     ) -> ProcessStatus {
         self.sync_params();
+        let latency = self.compressor.latency_samples();
+        if latency != self.reported_latency {
+            self.reported_latency = latency;
+            context.set_latency_samples(latency);
+        }
         let channels = buffer.as_slice();
         let frames = channels.first().map_or(0, |channel| channel.len());
         let input_peak_db = peak_db(channels);
-        let ctx = DspProcessContext::new(self.sample_rate, frames, 120.0, &[]);
         match channels.len() {
             0 => {}
             1 => {
                 let right = &mut self.mono_right[..frames];
                 right.copy_from_slice(channels[0]);
-                self.compressor.process_stereo(&ctx, channels[0], right);
+                self.compressor.process_stereo(channels[0], right);
             }
             _ => {
                 let (left, rest) = channels.split_at_mut(1);
-                self.compressor.process_stereo(&ctx, left[0], rest[0]);
+                self.compressor.process_stereo(left[0], rest[0]);
             }
         }
         let output_peak_db = peak_db(channels);
         self.meters.store(
             input_peak_db,
             output_peak_db,
-            (input_peak_db - output_peak_db).max(0.0).min(36.0),
+            self.compressor.take_gr_meter().min(36.0),
         );
         ProcessStatus::Normal
     }
@@ -262,7 +314,8 @@ impl Plugin for ZAudioCompressor {
 
 impl ClapPlugin for ZAudioCompressor {
     const CLAP_ID: &'static str = "dev.zaudio.compressor";
-    const CLAP_DESCRIPTION: Option<&'static str> = Some("Feed-forward compressor");
+    const CLAP_DESCRIPTION: Option<&'static str> =
+        Some("Feed-forward compressor with auto release, sidechain HPF, lookahead and warmth");
     const CLAP_MANUAL_URL: Option<&'static str> = Some(Self::URL);
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[

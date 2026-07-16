@@ -46,6 +46,8 @@ pub fn create_compressor_editor(
                                     &params.detector,
                                     setter,
                                 );
+                                slider(ui, "SC HPF", &params.sc_hpf, setter);
+                                slider(ui, "Lookahead", &params.lookahead, setter);
                             });
                         });
 
@@ -53,11 +55,14 @@ pub fn create_compressor_editor(
                             section(&mut columns[0], "Timing", |ui| {
                                 slider(ui, "Attack", &params.attack, setter);
                                 slider(ui, "Release", &params.release, setter);
+                                toggle(ui, "Auto Release", &params.auto_release, setter);
                                 slider(ui, "Stereo Link", &params.stereo_link, setter);
                             });
                             section(&mut columns[1], "Level", |ui| {
                                 slider(ui, "Input Gain", &params.input_gain, setter);
                                 slider(ui, "Makeup", &params.makeup_gain, setter);
+                                toggle(ui, "Auto Makeup", &params.auto_makeup, setter);
+                                slider(ui, "Warmth", &params.warmth, setter);
                                 slider(ui, "Mix", &params.mix, setter);
                             });
                         });
@@ -87,6 +92,18 @@ fn slider<P: Param>(ui: &mut egui::Ui, label: &str, param: &P, setter: &ParamSet
     ui.horizontal(|ui| {
         ui.label(label);
         ui.add(widgets::ParamSlider::for_param(param, setter).with_width(220.0));
+    });
+}
+
+fn toggle(ui: &mut egui::Ui, label: &str, param: &BoolParam, setter: &ParamSetter) {
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let mut on = param.value();
+        if ui.checkbox(&mut on, "").changed() {
+            setter.begin_set_parameter(param);
+            setter.set_parameter(param, on);
+            setter.end_set_parameter(param);
+        }
     });
 }
 

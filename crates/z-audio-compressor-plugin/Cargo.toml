@@ -1,6 +1,6 @@
 [package]
 name = "z-audio-compressor-plugin"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.85"
 publish = false
@@ -13,6 +13,7 @@ crate-type = ["cdylib", "lib"]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git", rev = "f36931f7af4646065488a9845d8f8c2f95252c23" }
 z-audio-dsp = { path = "../../thirdparty/z-audio-dsp/crates/z-audio-dsp" }
+z-audio-webclap-compressor = { path = "../z-audio-webclap-compressor" }
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 z-audio-webview-editor = { path = "../z-audio-webview-editor" }
