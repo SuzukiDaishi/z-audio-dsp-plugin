@@ -1,8 +1,10 @@
-// Z Audio Compressor UI — interactive transfer curve + grouped controls.
+// Z Audio Compressor UI — interactive transfer curve + grouped controls
+// + live gain-reduction metering.
 //
 // The curve IS the compressor: drag horizontally to move the threshold,
 // vertically to change the ratio, mouse-wheel to soften the knee. The
-// static-curve math mirrors the DSP's soft-knee gain computer.
+// static-curve math mirrors the DSP's soft-knee gain computer. A ZCGR
+// meter packet (~30 Hz) drives the GR bar and the live dot on the curve.
 
 "use strict";
 
@@ -19,26 +21,64 @@ const P = {
   mix: 147,
   detector: 148,
   stereoLink: 149,
+  scHpf: 980,
+  lookahead: 981,
+  autoRelease: 982,
+  autoMakeup: 983,
+  warmth: 984,
 };
+
+const SC_HPF_OFF = 20;
+
+const fmtHpf = (v) => (v <= SC_HPF_OFF + 0.5 ? "Off" : fmt.hz(v));
+const fmtLookahead = (v) => (v < 0.05 ? "Off" : `${v.toFixed(1)} ms`);
 
 const PARAMS = [
   { id: P.threshold, label: "Threshold", kind: "slider", min: -60, max: 0, default: -18, step: 0.1, fmt: fmt.db, mount: "#sec-comp" },
   { id: P.ratio, label: "Ratio", kind: "slider", min: 1, max: 20, default: 4, step: 0.01, fmt: fmt.ratio, mount: "#sec-comp" },
   { id: P.knee, label: "Knee", kind: "slider", min: 0, max: 24, default: 0, step: 0.1, fmt: fmt.db, mount: "#sec-comp" },
-  { id: P.detector, label: "Detector", kind: "select", options: ["Peak", "RMS"], default: 0, mount: "#sec-comp" },
+  { id: P.detector, label: "Detector", kind: "select", options: ["Peak", "RMS"], default: 0, mount: "#sec-detect" },
+  { id: P.scHpf, label: "SC HPF", kind: "slider", min: 20, max: 500, default: 20, scale: "log", fmt: fmtHpf, mount: "#sec-detect" },
+  { id: P.lookahead, label: "Lookahead", kind: "slider", min: 0, max: 10, default: 0, step: 0.1, fmt: fmtLookahead, mount: "#sec-detect" },
+  { id: P.stereoLink, label: "Link", kind: "slider", min: 0, max: 1, default: 1, step: 0.01, fmt: fmt.pct, mount: "#sec-detect" },
   { id: P.attack, label: "Attack", kind: "slider", min: 0.1, max: 200, default: 10, scale: "log", fmt: fmt.ms, mount: "#sec-time" },
   { id: P.release, label: "Release", kind: "slider", min: 5, max: 2000, default: 120, scale: "log", fmt: fmt.ms, mount: "#sec-time" },
-  { id: P.stereoLink, label: "Link", kind: "slider", min: 0, max: 1, default: 1, step: 0.01, fmt: fmt.pct, mount: "#sec-time" },
+  { id: P.autoRelease, label: "Auto Release", kind: "toggle", default: 1, mount: "#sec-time" },
   { id: P.inputGain, label: "Input", kind: "slider", min: -24, max: 24, default: 0, step: 0.1, fmt: fmt.db, mount: "#sec-level" },
   { id: P.makeup, label: "Makeup", kind: "slider", min: -24, max: 24, default: 0, step: 0.1, fmt: fmt.db, mount: "#sec-level" },
+  { id: P.autoMakeup, label: "Auto Makeup", kind: "toggle", default: 0, mount: "#sec-level" },
+  { id: P.warmth, label: "Warmth", kind: "slider", min: 0, max: 1, default: 0.15, step: 0.01, fmt: fmt.pct, mount: "#sec-level" },
   { id: P.mix, label: "Mix", kind: "slider", min: 0, max: 1, default: 1, step: 0.01, fmt: fmt.pct, mount: "#sec-level" },
 ];
+
+// Live meter state, fed by ZCGR packets from the plugin (wasm build only;
+// the native webview simply never sends them and the overlay stays hidden).
+const meter = { grDb: 0, inDb: -90, outDb: -90, alive: false };
+
+function handleBinary(data) {
+  if (!(data instanceof ArrayBuffer) || data.byteLength !== 16) return;
+  const view = new DataView(data);
+  if (
+    view.getUint8(0) !== 0x5a || // 'Z'
+    view.getUint8(1) !== 0x43 || // 'C'
+    view.getUint8(2) !== 0x47 || // 'G'
+    view.getUint8(3) !== 0x52 // 'R'
+  ) {
+    return;
+  }
+  meter.grDb = view.getFloat32(4, true);
+  meter.inDb = view.getFloat32(8, true);
+  meter.outDb = view.getFloat32(12, true);
+  meter.alive = true;
+  viz.redraw();
+}
 
 const sendSet = connect({
   onSnapshot: (snapshot) => {
     params.applySnapshot(snapshot);
     markConnected();
   },
+  onMessage: handleBinary,
 });
 
 const params = createParams(PARAMS, sendSet, () => viz.redraw(), ".panels");
@@ -49,6 +89,7 @@ const params = createParams(PARAMS, sendSet, () => viz.redraw(), ".panels");
 
 const DB_LO = -60;
 const DB_HI = 6;
+const GR_METER_RANGE = 24;
 
 /** Soft-knee gain computer output level (dB) for input level `x` (dB). */
 function transfer(x, t, ratio, knee) {
@@ -58,6 +99,12 @@ function transfer(x, t, ratio, knee) {
     return x + ((1 / ratio - 1) * k * k) / (2 * knee);
   }
   return over > 0 ? t + over / ratio : x;
+}
+
+/** Total makeup shown on the curve — manual plus the DSP's auto term. */
+function totalMakeup(t, ratio, knee, manual, autoOn) {
+  if (!autoOn) return manual;
+  return manual - 0.5 * (transfer(0, t, ratio, knee) - 0);
 }
 
 const canvas = document.getElementById("viz");
@@ -72,9 +119,19 @@ const viz = setupCanvas(canvas, () => {
   const t = params.get(P.threshold);
   const ratio = params.get(P.ratio);
   const knee = params.get(P.knee);
-  const makeup = params.get(P.makeup);
+  const makeup = totalMakeup(
+    t,
+    ratio,
+    knee,
+    params.get(P.makeup),
+    params.get(P.autoMakeup) >= 0.5,
+  );
 
-  const xOf = (db) => ((db - DB_LO) / (DB_HI - DB_LO)) * w;
+  // Reserve a strip on the right for the GR meter.
+  const meterW = 14 * dpr;
+  const plotW = w - meterW - 6 * dpr;
+
+  const xOf = (db) => ((db - DB_LO) / (DB_HI - DB_LO)) * plotW;
   const yOf = (db) => h - ((db - DB_LO) / (DB_HI - DB_LO)) * h;
 
   // Grid every 12 dB.
@@ -89,7 +146,7 @@ const viz = setupCanvas(canvas, () => {
     ctx.stroke();
     ctx.beginPath();
     ctx.moveTo(0, yOf(db));
-    ctx.lineTo(w, yOf(db));
+    ctx.lineTo(plotW, yOf(db));
     ctx.stroke();
     ctx.fillText(`${db}`, xOf(db) + 3 * dpr, h - 4 * dpr);
   }
@@ -118,14 +175,14 @@ const viz = setupCanvas(canvas, () => {
 
   // Gain-reduction fill between the curve and the unity line.
   ctx.beginPath();
-  for (let px = 0; px <= w; px++) {
-    const x = DB_LO + (px / w) * (DB_HI - DB_LO);
+  for (let px = 0; px <= plotW; px++) {
+    const x = DB_LO + (px / plotW) * (DB_HI - DB_LO);
     const y = yOf(transfer(x, t, ratio, knee) + makeup);
     if (px === 0) ctx.moveTo(px, y);
     else ctx.lineTo(px, y);
   }
-  for (let px = w; px >= 0; px--) {
-    const x = DB_LO + (px / w) * (DB_HI - DB_LO);
+  for (let px = plotW; px >= 0; px--) {
+    const x = DB_LO + (px / plotW) * (DB_HI - DB_LO);
     ctx.lineTo(px, yOf(x));
   }
   ctx.closePath();
@@ -135,8 +192,8 @@ const viz = setupCanvas(canvas, () => {
   // Transfer curve (with makeup).
   const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
   ctx.beginPath();
-  for (let px = 0; px <= w; px++) {
-    const x = DB_LO + (px / w) * (DB_HI - DB_LO);
+  for (let px = 0; px <= plotW; px++) {
+    const x = DB_LO + (px / plotW) * (DB_HI - DB_LO);
     const y = yOf(transfer(x, t, ratio, knee) + makeup);
     if (px === 0) ctx.moveTo(px, y);
     else ctx.lineTo(px, y);
@@ -153,6 +210,38 @@ const viz = setupCanvas(canvas, () => {
   ctx.arc(xOf(t), yOf(transfer(t, t, ratio, knee) + makeup), 4 * dpr, 0, Math.PI * 2);
   ctx.fillStyle = accent;
   ctx.fill();
+
+  // GR meter strip (fills top-down, like a VU pulled from unity).
+  const meterX = w - meterW;
+  ctx.fillStyle = "rgba(126, 147, 163, 0.12)";
+  ctx.fillRect(meterX, 0, meterW, h);
+  if (meter.alive) {
+    const grFrac = clamp(meter.grDb / GR_METER_RANGE, 0, 1);
+    ctx.fillStyle = "rgba(235, 110, 88, 0.85)";
+    ctx.fillRect(meterX, 0, meterW, grFrac * h);
+    ctx.fillStyle = "rgba(126, 147, 163, 0.75)";
+    ctx.font = `${8 * dpr}px sans-serif`;
+    ctx.fillText("GR", meterX + 1 * dpr, h - 4 * dpr);
+
+    // Live dot: current input level travelling the transfer curve.
+    const inDb = meter.inDb + params.get(P.inputGain);
+    if (inDb > DB_LO) {
+      const x = clamp(inDb, DB_LO, DB_HI);
+      ctx.beginPath();
+      ctx.arc(xOf(x), yOf(transfer(x, t, ratio, knee) + makeup), 5 * dpr, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(98, 184, 158, 0.9)";
+      ctx.fill();
+    }
+
+    // Numeric readouts, top-left.
+    ctx.fillStyle = "rgba(126, 147, 163, 0.9)";
+    ctx.font = `${10 * dpr}px sans-serif`;
+    ctx.fillText(
+      `IN ${meter.inDb.toFixed(1)}  GR ${meter.grDb.toFixed(1)}  OUT ${meter.outDb.toFixed(1)} dB`,
+      6 * dpr,
+      12 * dpr,
+    );
+  }
 });
 
 // Drag: horizontal = threshold, vertical = ratio. Wheel = knee.

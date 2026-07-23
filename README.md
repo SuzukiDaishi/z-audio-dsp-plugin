@@ -19,7 +19,9 @@ This workspace builds native and WebCLAP wrappers for:
   WebCLAP only for now
 - `Z Audio Parametric Reverb`: stereo FDN reverb effect
 - `Z Audio Limiter`: stereo lookahead limiter effect
-- `Z Audio Compressor`: stereo feed-forward compressor effect
+- `Z Audio Compressor`: stereo feed-forward compressor with program-
+  dependent auto release, sidechain HPF, lookahead, auto makeup and a
+  warmth saturator
 - `Z Audio Ring Mod`: ring modulator with a sine/tri/saw/square carrier,
   WebCLAP only
 - `Z Audio Distortion`: waveshaping distortion (soft/hard/fold/asym) with
@@ -231,7 +233,8 @@ plugin-specific visualization front and center:
   SOLO that plays only that band's region. All plotted curves are the
   exact RBJ responses the wasm engine runs.
 - **Compressor** — a soft-knee transfer curve you can drag (threshold /
-  ratio) and wheel (knee), with gain-reduction shading.
+  ratio) and wheel (knee), with gain-reduction shading, a live GR meter
+  and an input-level dot riding the curve.
 - **Limiter** — a brickwall transfer curve with draggable threshold and
   ceiling.
 - **Parametric Reverb** — a stylized impulse response showing pre-delay,

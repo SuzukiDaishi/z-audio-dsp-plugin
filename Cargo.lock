@@ -4822,11 +4822,12 @@ dependencies = [
 
 [[package]]
 name = "z-audio-compressor-plugin"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "nih_plug",
  "nih_plug_egui",
  "z-audio-dsp",
+ "z-audio-webclap-compressor",
  "z-audio-webview-editor",
 ]
 
